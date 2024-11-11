@@ -1,20 +1,20 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { log, error } from './common';
+import { log, error, pluralize } from './common';
+import { escapeMLString, HolServer, manpageToMarkdown, prettyStringToMarkdown } from './server';
+import { Message } from './serverTypes';
 
 /**
  * Path to where symbol databases are stored in each directory.
  */
-const databaseDir = ".hol-vscode";
+const databaseDir = '.hol-vscode';
 
 /**
  * Default locations to search for workspace-external dependencies in. Lines
  * that start with a dollar sign ($) are treated as environment variables.
  */
-const externalDirs = [
-    '$HOLDIR',
-];
+const externalDirs = ['$HOLDIR'];
 
 /**
  * The kind of entry indexed by the entry database:
@@ -31,7 +31,7 @@ interface HOLEntry {
     statement: string;
     file: string;
     line: number;
-    type: "Theorem" | "Definition" | "Inductive";
+    type: 'Theorem' | 'Definition' | 'Inductive';
 };
 
 /**
@@ -46,7 +46,7 @@ export function entryToSymbol(entry: HOLEntry): vscode.SymbolInformation {
         location: new vscode.Location(
             vscode.Uri.file(entry.file),
             new vscode.Position(entry.line - 1, 0)),
-        containerName: "",
+        containerName: '',
     };
 };
 
@@ -60,7 +60,7 @@ export function entryToCompletionItem(entry: HOLEntry): vscode.CompletionItem {
         entry.name,
         vscode.CompletionItemKind.Function,
     );
-    item.commitCharacters = [" "];
+    item.commitCharacters = [' '];
     item.documentation = `${entry.type}: ${entry.name}\n${entry.statement}`;
     return item;
 }
@@ -93,7 +93,7 @@ export class HOLIDE {
     /**
      * This variable holds the list of imports in the currently active document.
      */
-    public imports: string[] = [];
+    public imports: { [uri: string]: string[] | undefined } = {};
 
     /**
      * Database of workspace-local {@link HOLEntry} entries.
@@ -105,10 +105,51 @@ export class HOLIDE {
      */
     private externalIndex: HOLEntry[] = [];
 
+    private servers: { [uri: string]: HolServer | undefined } = {};
+    private diagState: { [uri: string]: vscode.Diagnostic[] } = {};
+
+    private prelude: string;
+    private postPrelude: string;
+
+    private diags: vscode.DiagnosticCollection = vscode.languages.createDiagnosticCollection('HOL4 diags');
+
+    private loadingSpinner?: vscode.StatusBarItem;
+
     constructor(
+        context: vscode.ExtensionContext,
+
+        /** Path to the HOL installation to use. */
+        private holPath: string,
+
         /** the path to the current workspace root */
         private workspaceDir: string
     ) {
+        this.startLoadingSpinner();
+
+        this.prelude = 'val _ = PolyML.print_depth 0;\n';
+        for (const file of [
+            ...[
+                'src/portableML/UC_ASCII_Encode.sig',
+                'src/portableML/UC_ASCII_Encode.sml',
+                'help/src-sml/ParseDoc.sig',
+                'help/src-sml/ParseDoc.sml',
+            ].map(f => path.join(holPath, f)),
+            ...['holide.sml', 'vscode.sml'].map(f => context.asAbsolutePath(path.join('src', f))),
+        ]) {
+            this.prelude += `val _ = use ${escapeMLString(file)};\n`;
+        }
+        this.postPrelude = 'val _ = HOL_IDE.postPrelude ();\n';
+
+        // Collect all `open` declarations in the current document.
+        let editor;
+        if ((editor = vscode.window.activeTextEditor)) {
+            const doc = editor.document;
+            const imports: string[] = [];
+            getImports(removeComments(doc.getText()), i => imports.push(toImport(i)));
+            this.imports[doc.uri.toString()] = imports;
+            this.startServer(doc).then(server => this.compileDocument(server, doc));
+        }
+
         // Read the entry-index in the workspace database.
         //
         // The first time a user opens a new workspace there generally won't be
@@ -131,9 +172,7 @@ export class HOLIDE {
         readDependencies(workspaceDir).forEach((depPath) => {
             const entries = readDatabase(depPath);
             if (entries) {
-                entries.forEach((entry) => {
-                    this.externalIndex.push(entry);
-                });
+                entries.forEach(entry => this.externalIndex.push(entry));
             } else {
                 log(`Unable to index ${depPath}`);
                 unindexed.push(depPath);
@@ -147,19 +186,12 @@ export class HOLIDE {
             );
             this.updateDependencyIndex(unindexed);
         }
+    }
 
-        vscode.window.showInformationMessage(
-            `HOL: Indexed ${this.workspaceIndex.length} workspace entries`
-        );
-        vscode.window.showInformationMessage(
-            `HOL: Indexed ${this.externalIndex.length} dependencies entries`
-        );
-
-        // Collect all `open` declarations in the current document.
-        let editor;
-        if ((editor = vscode.window.activeTextEditor)) {
-            this.imports = getImports(editor.document);
-        }
+    startLoadingSpinner() {
+        this.loadingSpinner = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+        this.loadingSpinner.text = '$(loading~spin) Loading HOL...';
+        this.loadingSpinner.show();
     }
 
     /**
@@ -175,7 +207,7 @@ export class HOLIDE {
      * Refresh the index entries for all files in the workspace.
      */
     indexWorkspace() {
-        let scripts: string[] = findExtFiles(this.workspaceDir, "Script.sml");
+        const scripts = findExtFiles(this.workspaceDir, 'Script.sml');
         this.updateWorkspaceIndex(scripts);
     }
 
@@ -200,12 +232,8 @@ export class HOLIDE {
 
         // Refresh the entries in `workspaceIndex` that referred to any of the
         // files in `files`:
-        this.workspaceIndex = this.workspaceIndex.filter((entry) =>
-            !files.includes(entry.file)
-        );
-        entries.forEach((entry) => {
-            this.workspaceIndex.push(entry);
-        });
+        this.workspaceIndex = this.workspaceIndex.filter(entry => !files.includes(entry.file));
+        entries.forEach(entry => this.workspaceIndex.push(entry));
 
         // Write to disk:
         const outputFile = path.join(outputDir, 'entries.json');
@@ -244,15 +272,13 @@ export class HOLIDE {
     private updateDependencyIndex(paths: string[]) {
         paths.forEach((depPath) => {
             try {
-                const files = findExtFiles(depPath, "Script.sml");
-                this.indexDep(files, depPath).forEach((entry) => {
+                const files = findExtFiles(depPath, 'Script.sml');
+                this.indexDep(files, depPath).forEach(entry => {
                     this.externalIndex.push(entry);
                 });
             } catch (err: unknown) {
                 if (err instanceof Error) {
-                    error(
-                        `Unable to index files in ${depPath}: ${err.message}`
-                    );
+                    error(`Unable to index files in ${depPath}: ${err.message} `);
                 }
             }
         });
@@ -268,17 +294,27 @@ export class HOLIDE {
     }
 
     updateImports(document: vscode.TextDocument) {
-        this.imports = getImports(document);
+        const imports: string[] = [];
+        getImports(removeComments(document.getText()), i => imports.push(toImport(i)));
+        this.imports[document.uri.toString()] = imports;
     }
 
     /**
-     * Returns all entries in the database: both those local to the current
+     * Calls `f` on all entries in the database: both those local to the current
      * workspace, and external entries.
-     *
-     * @returns All entries in the database.
      */
-    allEntries(): HOLEntry[] {
-        return this.workspaceIndex.concat(this.externalIndex);
+    forEachEntry(f: (_: HOLEntry) => void) {
+        this.workspaceIndex.forEach(f);
+        this.externalIndex.forEach(f);
+    }
+
+    /**
+     * Returns the first entry among all entries (both local and external) satisfying `f`.
+     *
+     * @returns The first matching result.
+     */
+    findEntry(f: (_: HOLEntry) => boolean): HOLEntry | undefined {
+        return this.workspaceIndex.find(f) || this.externalIndex.find(f);
     }
 
     /**
@@ -291,6 +327,191 @@ export class HOLIDE {
     documentEntries(document: vscode.TextDocument): HOLEntry[] {
         return this.workspaceIndex
             .filter((entry) => entry.file === document.uri.path);
+    }
+
+    server(document: vscode.TextDocument): HolServer {
+        const uri = document.uri.toString();
+        const s = this.servers[uri];
+        if (s) return s;
+        const docPath = path.dirname(document.fileName);
+        const server = new HolServer(docPath, this.holPath);
+        let progress: vscode.Position | undefined = new vscode.Position(0, 0);
+        server.messageListener = (msgs: Message[]) => {
+            let dirty = false;
+            const newDiags = [];
+            for (const e of msgs) {
+                switch (e.kind) {
+                    case 'compilerOut': log(e.body); break;
+                    case 'toplevelOut': log(e.body); break;
+                    case 'compileProgress':
+                        if (e.pos[0] || e.pos[1]) {
+                            progress = server.utf8ToPosition(e.pos);
+                            dirty = true;
+                        }
+                        break;
+                    case 'error':
+                        newDiags.push(new vscode.Diagnostic(server.utf8ToRange(e.pos), e.msg, e.hard ?
+                            vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning));
+                        break;
+                    case 'compileCompleted': progress = undefined; dirty = true; break;
+                }
+            }
+            this.diagState[uri].push(...newDiags);
+            if (dirty) {
+                if (this.loadingSpinner) {
+                    if (progress) {
+                        this.loadingSpinner.text =
+                            `$(loading~spin) Loading ${path.basename(document.fileName)}... (${progress.line}/${document.lineCount})`;
+                    } else {
+                        this.loadingSpinner.dispose();
+                        this.loadingSpinner = undefined;
+                    }
+                }
+                this.diags.set(document.uri, this.diagState[uri].concat(
+                    (this.diags.get(document.uri) ?? [])
+                        .filter(diag => progress && diag.range.start.isAfterOrEqual(progress))));
+            } else {
+                this.diags.set(document.uri, (this.diags.get(document.uri) ?? []).concat(newDiags));
+            }
+        };
+        return this.servers[uri] = server;
+    }
+
+    async startServer(document: vscode.TextDocument): Promise<HolServer> {
+        const server = this.server(document);
+        await server.ensureRunning(async () => {
+            const text = document.getText();
+            const imports: string[] = [];
+            getImports(text, s => imports.push(s));
+            if (this.loadingSpinner) {
+                this.loadingSpinner.text = `$(loading~spin) Loading ${pluralize(imports.length, 'module')}...`;
+                this.loadingSpinner.tooltip = `Loading ${imports.join(', ')}`;
+                this.loadingSpinner.show();
+            }
+            const loads = imports.map(s => `val _ = load "${s}" handle _ => ();\n`);
+            if (document.fileName.endsWith('.sml') && !document.fileName.endsWith('Script.sml')) {
+                const sigfile = document.fileName.substring(0, document.fileName.length - 4) + '.sig';
+                if (fs.existsSync(sigfile)) {
+                    loads.push(`val _ = use "${path.basename(sigfile)}";\n`);
+                }
+            }
+            const response = await server.request(this.prelude, ...loads, this.postPrelude);
+            if (this.loadingSpinner) this.loadingSpinner.tooltip = undefined;
+            if (response) {
+                log(`server was noisy: \n${response}`);
+                const start = response.indexOf('error:');
+                if (start >= 0) {
+                    const error = response.substring(start);
+                    if (this.loadingSpinner) {
+                        this.loadingSpinner.text = '$(error) HOL load failed'
+                        this.loadingSpinner.tooltip = error
+                        this.loadingSpinner.backgroundColor =
+                            new vscode.ThemeColor('statusBarItem.errorBackground')
+                    }
+                    throw error;
+                }
+            }
+        });
+        return server;
+    }
+
+    async compileDocument(server: HolServer, document: vscode.TextDocument): Promise<void> {
+        if (server.lastVersion != document.version) {
+            // console.log(Date.now(), `setFileContents`);
+            this.diagState[document.uri.toString()] = [];
+            await server.setFileContents(document.getText(), document.version);
+        }
+    }
+
+    async ensureCompiled(document: vscode.TextDocument): Promise<HolServer> {
+        const server = await this.startServer(document);
+        await this.compileDocument(server, document);
+        return server;
+    }
+
+    async getHoverInfo(
+        document: vscode.TextDocument, inRange: vscode.Range, results: vscode.MarkdownString[]
+    ): Promise<vscode.Range | undefined> {
+        const server = await this.ensureCompiled(document);
+        const pos = server.rangeToUtf8(inRange);
+        let range: vscode.Range | undefined = undefined;
+        for (const hover of await server.getHoverInfo(pos)) {
+            switch (hover.kind) {
+                case 'type':
+                    const range2 = server.utf8ToRange(hover.pos);
+                    range = range ? range.union(range2) : range2;
+                    results.push(prettyStringToMarkdown(hover.value));
+                    break;
+                case 'doctxt':
+                    results.push((new vscode.MarkdownString).appendCodeblock(hover.text, 'plaintext'));
+                    break;
+                case 'doc':
+                    results.push(manpageToMarkdown(hover.doc));
+                    break;
+            }
+        }
+        return range;
+    }
+
+    async gotoDefinition(
+        document: vscode.TextDocument, position: vscode.Position
+    ): Promise<vscode.LocationLink[]> {
+        const server = await this.ensureCompiled(document);
+        const pos = server.positionToUtf8(position);
+        const results: vscode.LocationLink[] = [];
+        for (const [origin, target] of await server.gotoDefinition(pos)) {
+            const originSelectionRange = server.utf8ToRange(origin);
+            if ('file' in target) {
+                const lineNr = target.line - 1;
+                let search = document.getText(originSelectionRange);
+                search = search.substring(search.lastIndexOf('.') + 1);
+                const buffer = await fs.promises.readFile(target.file);
+                let start = 0; let end = 0; let i = 0;
+                for (let i = 0; ; i++) {
+                    end = buffer.indexOf(0x0a, start);
+                    if (end < 0) { end = buffer.length; break; }
+                    if (i >= lineNr) break;
+                    start = end + 1;
+                }
+                const line = buffer.toString('utf8', start, end);
+                const char = line.search(search);
+                results.push({
+                    originSelectionRange,
+                    targetUri: vscode.Uri.file(target.file),
+                    targetRange: char >= 0
+                        ? new vscode.Range(lineNr, char, lineNr, char + search.length)
+                        : new vscode.Range(lineNr, 0, lineNr, line.length),
+                });
+            } else {
+                results.push({
+                    originSelectionRange,
+                    targetUri: document.uri,
+                    targetRange: server.utf8ToRange(target),
+                });
+            }
+        }
+        return results;
+    }
+
+    restartServers() {
+        for (const s in this.servers) this.servers[s]!.dispose();
+        this.diags.clear();
+        this.servers = {};
+        this.loadingSpinner?.dispose();
+        this.loadingSpinner = undefined;
+
+        for (const editor of vscode.window.visibleTextEditors) {
+            const doc = editor.document;
+            if (doc.languageId == 'hol4') {
+                if (!this.loadingSpinner) this.startLoadingSpinner();
+                this.startServer(doc).then(server => this.compileDocument(server, doc));
+            }
+        }
+    }
+
+    dispose() {
+        for (const s in this.servers) this.servers[s]!.dispose();
+        this.diags.dispose();
     }
 }
 
@@ -310,7 +531,7 @@ function readDatabase(dir: string): HOLEntry[] | undefined {
         return;
     }
 
-    const outputFile = path.join(outputDir, "entries.json");
+    const outputFile = path.join(outputDir, 'entries.json');
     if (!fs.existsSync(outputFile)) {
         log(`${outputFile} does not exist`);
         return;
@@ -320,7 +541,7 @@ function readDatabase(dir: string): HOLEntry[] | undefined {
         return JSON.parse(fs.readFileSync(outputFile, 'utf-8'));
     } catch (err) {
         if (err instanceof Error) {
-            log(`Unable read ${outputFile}: ${err.message}`);
+            log(`Unable read ${outputFile}: ${err.message} `);
         }
         return;
     }
@@ -338,24 +559,28 @@ function readDependencies(dir: string): string[] {
     let paths: string[] = externalDirs;
 
     const outputFile = path.join(dir, databaseDir, 'dependencies.json');
-    try {
-        const contents = fs.readFileSync(outputFile, 'utf-8');
-        paths.concat(JSON.parse(contents));
-    } catch (err) {
-        if (err instanceof Error) {
-            log(`Unable to parse ${outputFile}: ${err.message}`);
-            log(`Proceeding with default external dependencies`);
-        }
-    } finally {
-        return paths.map(p => {
-            if (p.startsWith('$')) {
-                const envVar = p.slice(1);
-                return process.env[envVar]!;
-            } else {
-                return p;
+    if (!fs.existsSync(outputFile)) {
+        log(`${outputFile} does not exist, \n` +
+            `proceeding with default external dependencies`);
+    } else {
+        try {
+            const contents = fs.readFileSync(outputFile, 'utf-8');
+            paths = paths.concat(JSON.parse(contents));
+        } catch (err) {
+            if (err instanceof Error) {
+                log(`Unable to parse ${outputFile}: ${err.message}, \n` +
+                    `proceeding with default external dependencies`);
             }
-        });
+        }
     }
+    return paths.map(p => {
+        if (p.startsWith('$')) {
+            const envVar = p.slice(1);
+            return process.env[envVar]!;
+        } else {
+            return p;
+        }
+    });
 }
 
 /**
@@ -366,25 +591,16 @@ function readDependencies(dir: string): string[] {
  * @param ext
  * @returns
  */
-function findExtFiles(directory: string, ext: string): string[] {
-    const smlFiles: string[] = [];
-    fs.readdirSync(directory, { withFileTypes: true }).forEach((entry) => {
-        const filePath = path.join(directory, entry.name);
+function findExtFiles(directory: string, ext: string, smlFiles: string[] = []): string[] {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (entry.isDirectory() && !entry.name.startsWith('.')) {
-            smlFiles.push(...findExtFiles(filePath, ext));
+            findExtFiles(path.join(directory, entry.name), ext, smlFiles);
         } else if (entry.isFile() && entry.name.endsWith(ext)) {
-            smlFiles.push(filePath);
+            smlFiles.push(path.join(directory, entry.name));
         }
-    });
+    }
     return smlFiles;
 }
-
-const importRegex = /^\s*open\b/mg;
-const identRegex = /\s+([a-zA-Z][a-zA-Z0-9_']*)\b/mg;
-const keywords = new Set([
-    'datatype', 'local', 'nonfix', 'prim_val', 'type', 'val', 'end', 'exception',
-    'functor', 'signature', 'structure', 'end', 'exception', 'open',
-]);
 
 /**
  * Returns the imported theories in the document.
@@ -392,48 +608,102 @@ const keywords = new Set([
  * @param document Document to scan for imported theories.
  * @returns A list of imports.
  */
-function getImports(document: vscode.TextDocument): string[] {
-    const imports: string[] = [];
-    const text = document.getText();
-    const contents = removeComments(text);
-    let match: RegExpExecArray | null;
-    while (importRegex.exec(contents)) {
-        let lastIndex = identRegex.lastIndex = importRegex.lastIndex;
-        while ((match = identRegex.exec(contents))) {
-            if (match.index != lastIndex) break;
-            lastIndex = identRegex.lastIndex;
-            const name = match[1];
-            if (keywords.has(name)) {
-                if (name == 'open') identRegex.lastIndex = match.index;
-                break;
+export const getImports = (() => {
+    const importRegex = /^\s*(local\s*)?open\b/mg;
+    const identRegex = /\s+([a-zA-Z][a-zA-Z0-9_']*)\b/my;
+    const semiRegex = /[\s;]*/my;
+    const keywords = new Set([
+        'datatype', 'local', 'nonfix', 'prim_val', 'type', 'val', 'end', 'exception',
+        'functor', 'signature', 'structure', 'open', 'fun', 'infix', 'infixr', 'in',
+        'Theorem', 'Definition', 'Inductive', 'CoInductive', 'Triviality',
+        'Datatype', 'Type', 'Overload'
+    ]);
+    return (text: string, onImport: (imp: string) => void, onOpen: (start: number, end: number) => void = () => { }) => {
+        let match: RegExpExecArray | null;
+        while (importRegex.exec(text)) {
+            let end = identRegex.lastIndex = importRegex.lastIndex;
+            const start = end - 4;
+            let first = true;
+            while ((match = identRegex.exec(text))) {
+                const name = match[1];
+                if (!first && keywords.has(name)) {
+                    if (name == 'open') end = match.index;
+                    break;
+                }
+                onImport(name);
+                first = false;
+                end = identRegex.lastIndex;
             }
-            const n = name.match(/(\S+)Theory/);
-            if (n) {
-                imports.push(n[1] + 'Script.sml');
-            } else {
-                imports.push(name);
-            }
+            semiRegex.lastIndex = end;
+            semiRegex.exec(text);
+            end = semiRegex.lastIndex;
+            onOpen(start, end);
+            importRegex.lastIndex = end;
         }
-        importRegex.lastIndex = identRegex.lastIndex;
     }
-    return imports;
+})();
+
+function toImport(name: string): string {
+    const n = name.match(/(\S+)Theory/);
+    return n ? n[1] + 'Script.sml' : name;
+}
+
+
+/**
+ * Gets comments in the contents of a HOL4 file.
+ *
+ * @param contents
+ * @returns
+ */
+export function findComments(str: string, onComment: (start: number, end: number) => void) {
+    let open = str.indexOf('(*');
+    if (open < 0) return;
+    let start = open;
+    let end = open + 2;
+    let close = str.indexOf('*)', end);
+    if (close < 0) return;
+    let depth = 1;
+    open = str.indexOf('(*', end);
+    while (true) {
+        if (open >= 0 && open < close) {
+            depth++;
+            end = open + 2;
+            open = str.indexOf('(*', end);
+        } else {
+            end = close + 2;
+            if (depth == 1) {
+                onComment(start, end);
+                if (open < 0) return;
+                start = open;
+                end = open + 2;
+                open = str.indexOf('(*', end);
+            } else {
+                depth--;
+            }
+            close = str.indexOf('*)', end);
+            if (close < 0) return;
+        }
+    }
 }
 
 /**
  * Removes comments from the contents of a HOL4 file.
  *
- * TODO(oskar.abrahamsson) There's a similar function in hol_extension_context.
- *
  * @param contents
  * @returns
  */
-function removeComments(contents: string): string {
-    const commentRegex = /\(\*[\s\S]*?\*\)/g;
-    return contents.replace(commentRegex, (match: string) => {
+export function removeComments(contents: string): string {
+    let index = 0;
+    let buffer: string[] = [];
+    findComments(contents, (start, end) => {
+        const match = contents.substring(start + 2, end - 2);
         const numNewlines = match.split(/\r\n|\n|\r/).length - 1;
-        const newlines = '\n'.repeat(numNewlines);
-        return newlines;
+        buffer.push(contents.substring(index, start), '\n'.repeat(numNewlines));
+        index = end;
     });
+    if (!buffer) return contents;
+    buffer.push(contents.substring(index));
+    return buffer.join('');
 }
 
 /**
@@ -441,10 +711,10 @@ function removeComments(contents: string): string {
  */
 export function isAccessibleEntry(
     entry: HOLEntry,
-    imports: string[],
+    imports: string[] | undefined,
     document: vscode.TextDocument,
 ): boolean {
-    return imports.some((imp) => entry.file.includes(imp)) ||
+    return imports?.some(imp => entry.file.includes(imp)) ||
         entry.file.includes(document.fileName);
 }
 
@@ -457,22 +727,24 @@ export function isAccessibleEntry(
  * ```
  * where `<attribute-list>` is a comma-separated list of identifiers.
  */
-function parseTheoremRegex(filename: string, contents: string): HOLEntry[] {
+const parseTheoremRegex = (() => {
     const theoremRegex = /Theorem\s+(\S+?)\s*:\s+([\s\S]*?)\sProof\s+([\s\S]*?)\sQED/mg;
     const afterIdentifierThingRegex = /\[\S*?\]/mg;
-    const entries: HOLEntry[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = theoremRegex.exec(contents))) {
-        entries.push({
-            name: match[1].replace(afterIdentifierThingRegex, ""),
-            statement: match[2],
-            file: filename,
-            line: contents.slice(0, match.index).split("\n").length,
-            type: "Theorem",
-        });
+    return (filename: string, contents: string): HOLEntry[] => {
+        const entries: HOLEntry[] = [];
+        let match: RegExpExecArray | null;
+        while ((match = theoremRegex.exec(contents))) {
+            entries.push({
+                name: match[1].replace(afterIdentifierThingRegex, ''),
+                statement: match[2],
+                file: filename,
+                line: contents.slice(0, match.index).split('\n').length,
+                type: 'Theorem',
+            });
+        }
+        return entries;
     }
-    return entries;
-}
+})();
 
 /**
  * Try to parse all HOL `Definition` declarations in a string:
@@ -484,34 +756,36 @@ function parseTheoremRegex(filename: string, contents: string): HOLEntry[] {
  *   End
  * ```
  */
-function parseDefinitions(filename: string, contents: string): HOLEntry[] {
+const parseDefinitions = (() => {
     const definition = /Definition\s+(\S+?)\s*:\s+([\s\S]*?)\sEnd/mg;
     const termination = /([\s\S]*?)Termination\s+([\s\S]*?)\s/;
     const attributes = /\[\S*?\]/mg;
-    const entries: HOLEntry[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = definition.exec(contents))) {
-        let statement: RegExpExecArray | null;
-        if (match[2].includes("Termination") && (statement = termination.exec(match[2]))) {
-            entries.push({
-                name: match[1].replace(attributes, ""),
-                statement: statement[1],
-                file: filename,
-                line: contents.slice(0, match.index).split("\n").length,
-                type: "Definition",
-            });
-        } else {
-            entries.push({
-                name: match[1].replace(attributes, ""),
-                statement: match[2],
-                file: filename,
-                line: contents.slice(0, match.index).split("\n").length,
-                type: "Definition",
-            });
+    return (filename: string, contents: string): HOLEntry[] => {
+        const entries: HOLEntry[] = [];
+        let match: RegExpExecArray | null;
+        while ((match = definition.exec(contents))) {
+            let statement: RegExpExecArray | null;
+            if (match[2].includes('Termination') && (statement = termination.exec(match[2]))) {
+                entries.push({
+                    name: match[1].replace(attributes, ''),
+                    statement: statement[1],
+                    file: filename,
+                    line: contents.slice(0, match.index).split('\n').length,
+                    type: 'Definition',
+                });
+            } else {
+                entries.push({
+                    name: match[1].replace(attributes, ''),
+                    statement: match[2],
+                    file: filename,
+                    line: contents.slice(0, match.index).split('\n').length,
+                    type: 'Definition',
+                });
+            }
         }
+        return entries;
     }
-    return entries;
-}
+})();
 
 /**
  * Try to parse all HOL `Define` declarations in a string:
@@ -532,17 +806,17 @@ function parseDefines(filename: string, contents: string): HOLEntry[] {
  * ```
  */
 function parseStoreThms(filename: string, contents: string): HOLEntry[] {
-    const storethmSMLSyntax = /val\s+(\S*)\s*=\s*(?:Q\.)?store_thm\s*\([^,]+,\s+\(?(?:“|`|``)([^”`]*)(?:”|`|``)\)?\s*,[^;]+?;/mg;
+    const storethmSMLSyntax = /val\s+(\S*)\s*=\s*(?:Q\.)?store_thm\s*\([^,]+,\s+\(?(?:“|`| ``) ([^”`]*)(?:”|` | ``) \)?\s *, [^;] +?;/mg;
     const attributes = /\[\S*?\]/mg;
     const entries: HOLEntry[] = [];
     let match: RegExpExecArray | null;
     while ((match = storethmSMLSyntax.exec(contents))) {
         entries.push({
-            name: match[1].replace(attributes, ""),
+            name: match[1].replace(attributes, ''),
             statement: match[2],
             file: filename,
-            line: contents.slice(0, match.index).split("\n").length,
-            type: "Theorem",
+            line: contents.slice(0, match.index).split('\n').length,
+            type: 'Theorem',
         });
     }
     return entries;
@@ -563,11 +837,11 @@ function parseInductives(filename: string, contents: string): HOLEntry[] {
     let match: RegExpExecArray | null;
     while ((match = inductive.exec(contents))) {
         entries.push({
-            name: match[1].replace(attributes, "") + "_def",
+            name: match[1].replace(attributes, '') + '_def',
             statement: match[2],
             file: filename,
-            line: contents.slice(0, match.index).split("\n").length,
-            type: "Inductive",
+            line: contents.slice(0, match.index).split('\n').length,
+            type: 'Inductive',
         });
     }
     return entries;

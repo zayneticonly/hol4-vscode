@@ -19,3 +19,22 @@ export function disallowConcurrency<T>(fn: (arg: T) => Promise<void>): (arg: T) 
         return inprogressPromise
     }
 };
+
+export function partitionPoint(len: number, pred: (i: number) => boolean) {
+    let start = 0;
+    while (0 < len) {
+        const half = len / 2 | 0;
+        const middle = start + half;
+        if (pred(middle)) {
+            start = middle + 1;
+            len -= half + 1;
+        } else {
+            len = half;
+        }
+    }
+    return start;
+}
+
+export function pluralize(n: number, stem: string, s: string = 's') {
+    return `${n} ${n == 1 ? stem : stem + s}`;
+}

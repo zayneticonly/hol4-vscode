@@ -31,7 +31,7 @@ let hol4selector: vscode.DocumentSelector = {
  *
  * @returns An extension context if successful, or `undefined` otherwise.
  */
-function initialize(): HOLExtensionContext | undefined {
+function initialize(context: vscode.ExtensionContext): HOLExtensionContext | undefined {
     log('Attempting to determine HOLDIR.');
 
     let holPath;
@@ -51,7 +51,7 @@ function initialize(): HOLExtensionContext | undefined {
         // this time there should be a workspace.
         if (vscode.workspace.workspaceFolders.length == 1) {
             const workspacePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            holIDE = new HOLIDE(workspacePath);
+            holIDE = new HOLIDE(context, holPath, workspacePath);
         } else {
             vscode.window.showErrorMessage('HOL4 mode: multi-root workspaces not supported');
             error('workspace has too many roots');
@@ -71,7 +71,7 @@ function initialize(): HOLExtensionContext | undefined {
 
 let holExtensionContext: HOLExtensionContext | undefined;
 export function activate(context: vscode.ExtensionContext) {
-    holExtensionContext = initialize();
+    holExtensionContext = initialize(context);
     if (!holExtensionContext) {
         error("Unable to initialize extension.");
         return;
@@ -164,7 +164,7 @@ export function activate(context: vscode.ExtensionContext) {
         }),
 
         // Run Holmake in current directory
-        vscode.commands.registerTextEditorCommand('hol4-mode.holmake', (editor) => {
+        vscode.commands.registerTextEditorCommand('hol4-mode.holmake', editor => {
             const docPath = path.dirname(editor.document.uri.fsPath);
             const terminal = vscode.window.createTerminal({
                 cwd: docPath,
@@ -179,9 +179,12 @@ export function activate(context: vscode.ExtensionContext) {
             await holExtensionContext?.notebook?.clearAll();
         }),
 
-        vscode.commands.registerCommand('hol4-mode.restart', async () => {
-            await holExtensionContext?.notebook?.stop();
-            await holExtensionContext?.notebook?.start();
+        vscode.commands.registerCommand('hol4-mode.restart', () => {
+            (async () => {
+                await holExtensionContext?.notebook?.stop();
+                await holExtensionContext?.notebook?.start();
+            })();
+            holExtensionContext?.holIDE?.restartServers();
         }),
 
         vscode.commands.registerCommand('hol4-mode.collapseAllCells', async () => {
@@ -193,14 +196,20 @@ export function activate(context: vscode.ExtensionContext) {
         }),
 
         // Refresh the import list for the currently active document.
-        vscode.window.onDidChangeActiveTextEditor((editor) => {
+        vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor) {
                 holExtensionContext?.holIDE?.updateImports(editor.document);
             }
         }),
 
-        vscode.workspace.onDidSaveTextDocument((document) => {
-            holExtensionContext?.holIDE?.indexDocument(document);
+        vscode.workspace.onDidSaveTextDocument(document => {
+            if (document.languageId == 'hol4') {
+                (async () => {
+                    const server = await holExtensionContext?.holIDE?.startServer(document);
+                    if (server) await holExtensionContext?.holIDE?.compileDocument(server, document);
+                })();
+                holExtensionContext?.holIDE?.indexDocument(document);
+            }
         }),
 
         vscode.commands.registerCommand('hol4-mode.indexWorkspace', () => {

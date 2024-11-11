@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { log, error, EXTENSION_ID, KERNEL_ID } from './common';
 import { HolNotebook } from './notebook';
-import { HOLIDE, entryToCompletionItem, entryToSymbol, isAccessibleEntry } from './holIDE';
+import { HOLIDE, entryToCompletionItem, entryToSymbol, getImports, isAccessibleEntry, removeComments } from './holIDE';
 
 /**
  * Generate a HOL lexer location pragma from a vscode Position value.
@@ -11,57 +11,8 @@ function positionToLocationPragma(pos: vscode.Position): string {
     return `(*#loc ${pos.line + 1} ${pos.character} *)`;
 }
 
-type SearchForwardResult = {
-    matchStart: number;
-    contentStart: number;
-    matchEnd: number;
-    contentEnd: number;
-};
-
 /**
- * Search forward in text and find the start- and end positions for the matched
- * text, and the content within the match (i.e. between the `start` and `stop`
- * match). If the `stop` regex is not matched, the end of the string counts as
- * the end of the match and the end of the contents.
- *
- * @param init Starting match
- * @param stop Ending match
- * @param offset Offset into `data` from where to start search
- */
-function searchForward(text: string, offset: number, init: RegExp, stop: RegExp): SearchForwardResult | undefined {
-    text = text.slice(offset);
-
-    const initMatch = init.exec(text);
-    if (!initMatch) {
-        return;
-    }
-
-    const matchStart = initMatch.index;
-    const contentStart = matchStart + initMatch[0].length;
-
-    const stopMatch = stop.exec(text.slice(contentStart));
-    if (!stopMatch) {
-        return {
-            matchStart: matchStart,
-            contentStart: contentStart,
-            matchEnd: text.length - 1,
-            contentEnd: text.length - 1
-        };
-    }
-
-    const contentEnd = contentStart + stopMatch.index;
-    const matchEnd = contentEnd + stopMatch[0].length;
-
-    return {
-        matchStart: matchStart,
-        contentStart: contentStart,
-        matchEnd: matchEnd,
-        contentEnd: contentEnd
-    };
-}
-
-/**
- * Get the editors current selection if any, or the contents of the editors
+ * Get the editors current selection if any, or the contents of the editor's
  * current line otherwise.
  */
 function getSelection(editor: vscode.TextEditor): string {
@@ -91,44 +42,35 @@ function addLocationPragma(text: string, position: vscode.Position) {
  * in the text, then this does nothing.
  */
 function processOpens(text: string): string {
-
-    const stoppers = [
-        "val", "fun", "local", "open", "type", "datatype", "nonfix", "infix",
-        "exception", "in", "end", "structure", "Theorem", "Definition",
-        "Inductive", "CoInductive", "Triviality", "Datatype", "Type", "Overload"
-    ];
-    const openTerms = new RegExp(`;\|${stoppers.join('\\s\|\\s')}\\s`);
-    const openBegin = /\s*open\s/;
-    const comment = /\(\*(\*[^\)]|[^\*])*\*\)/g;
-
-    let theories: string[] = [];
-    let match;
-    while ((match = searchForward(text, 0, openBegin, openTerms))) {
-        text.slice(match.contentStart, match.contentEnd)
-            .replace(comment, '')
-            .split(/\s/)
-            .filter((s) => s.length > 0)
-            .sort()
-            .forEach((s) => theories.push(s));
-        text = text.substring(0, match.matchStart + 1) + text.substring(match.contentEnd);
+    text = removeComments(text).replace(/\n\s*\n/g, '\n').replace(/\r/g, '');
+    let index = 0;
+    let buffer = [];
+    let quiet = false;
+    function setQuiet(q: boolean) {
+        if (quiet != q) {
+            buffer.push('\nval _ = HOL_Interactive.toggle_quietdec();\n');
+        }
+        quiet = q;
     }
+    const theories: string[] = [];
+    getImports(text, theories.push, (start, end) => {
+        const mid = text.substring(index, start);
+        if (/[^\s;]/.test(mid)) setQuiet(false);
+        buffer.push(mid);
+        setQuiet(true);
+        buffer.push(text.substring(start, end));
+        index = end;
+    });
+    if (!theories) return text;
+    theories.sort();
 
-    text = text.replace(/\n\s*\n/g, '\n').replace(/\r/g, '');
-
-    if (theories.length < 1) {
-        return text;
-    }
-
+    setQuiet(false);
     const banner = `val _ = print "Loading: ${theories.join(' ')} ...\\n";`;
-    const loads = theories.map((s) => `val _ = load "${s}";`).join('\n');
-    const opens = [
-        'val _ = HOL_Interactive.toggle_quietdec();',
-        `open ${theories.join(' ')};`,
-        'val _ = HOL_Interactive.toggle_quietdec();'
-    ].join('\n');
-    const bannerDone = 'val _ = print "Done loading theories.\\n"';
-
-    return [banner, loads, opens, bannerDone, text].join('\n');
+    const loads = theories.map((s) => `val _ = load "${s}";\n`);
+    const bannerDone = 'val _ = print "Done loading theories.\\n"\n';
+    buffer.unshift(banner, ...loads);
+    buffer.push(bannerDone, text.substring(index));
+    return buffer.join('');
 }
 
 /**
@@ -254,7 +196,10 @@ function extractSubgoal(editor: vscode.TextEditor): [string, string] | undefined
     return;
 }
 
-export class HOLExtensionContext implements vscode.CompletionItemProvider {
+export class HOLExtensionContext implements
+    vscode.DefinitionProvider, vscode.HoverProvider, vscode.DocumentSymbolProvider,
+    vscode.WorkspaceSymbolProvider, vscode.CompletionItemProvider {
+
     /** Currently active notebook editor (if any). */
     public notebook?: HolNotebook;
 
@@ -330,16 +275,16 @@ export class HOLExtensionContext implements vscode.CompletionItemProvider {
             vscode.commands.executeCommand('notebook.selectKernel',
                 { notebookEditor, id: KERNEL_ID, extension: EXTENSION_ID }
             );
-            this.notebook = new HolNotebook(docPath, this.holPath, notebookEditor);
+            this.notebook = new HolNotebook(docPath, this.holPath, notebookEditor!);
 
             vscode.window.tabGroups.onDidChangeTabGroups((e) => {
-                if (e.closed && notebookEditor.notebook.isClosed) {
+                if (e.closed && notebookEditor!.notebook.isClosed) {
                     this.notebook?.dispose();
                     this.notebook = undefined;
                 }
             });
             vscode.window.tabGroups.onDidChangeTabs((e) => {
-                if (e.closed && notebookEditor.notebook.isClosed) {
+                if (e.closed && notebookEditor!.notebook.isClosed) {
                     this.notebook?.dispose();
                     this.notebook = undefined;
                 }
@@ -577,37 +522,57 @@ export class HOLExtensionContext implements vscode.CompletionItemProvider {
     /**
      * See {@link vscode.HoverProvider}.
      */
-    provideHover(document: vscode.TextDocument, position: vscode.Position, _token: vscode.CancellationToken) {
+    async provideHover(document: vscode.TextDocument, position: vscode.Position, _token: vscode.CancellationToken) {
+        const results: vscode.MarkdownString[] = [];
+        const sels = vscode.window.activeTextEditor?.selections;
+        let inRange = new vscode.Range(position, position);
+        if (sels) {
+            for (const sel of sels) {
+                if (sel.contains(position)) {
+                    inRange = sel;
+                    break;
+                }
+            }
+        }
+        const promise = this.holIDE?.getHoverInfo(document, inRange, results);
         const wordRange = document.getWordRangeAtPosition(position);
         const word = document.getText(wordRange);
-        const entry = this.holIDE?.allEntries().find((entry) =>
+        const entry = this.holIDE?.findEntry(entry =>
             entry.name === word &&
-            isAccessibleEntry(entry, this.holIDE!.imports, document));
+            isAccessibleEntry(entry, this.holIDE!.imports[document.uri.toString()], document));
+        const range = await promise?.catch();
         if (entry) {
             const markdownString = new vscode.MarkdownString();
             markdownString.appendMarkdown(`**${entry.type}:** ${entry.name}\n\n`);
             markdownString.appendCodeblock(entry.statement);
-            return new vscode.Hover(markdownString, wordRange);
+            results.push(markdownString);
         }
+        if (results) return new vscode.Hover(results, range ?? wordRange);
     }
 
     /**
      * See {@link vscode.DefinitionProvider}.
      */
-    provideDefinition(
+    async provideDefinition(
         document: vscode.TextDocument,
         position: vscode.Position,
         _token: vscode.CancellationToken,
-    ) {
+    ): Promise<vscode.DefinitionLink[]> {
+        const promise = this.holIDE?.gotoDefinition(document, position);
         const wordRange = document.getWordRangeAtPosition(position);
         const word = document.getText(wordRange);
-        const entry = this.holIDE?.allEntries().find((entry) =>
+        const entry = this.holIDE?.findEntry(entry =>
             entry.name === word &&
-            isAccessibleEntry(entry, this.holIDE!.imports, document));
+            isAccessibleEntry(entry, this.holIDE!.imports[document.uri.toString()], document));
+        const defns: vscode.DefinitionLink[] = (await promise?.catch()) ?? [];
         if (entry) {
-            const position = new vscode.Position(entry.line! - 1, 0);
-            return new vscode.Location(vscode.Uri.file(entry.file!), position);
+            const position = new vscode.Position(entry.line - 1, 0);
+            defns.push({
+                targetUri: vscode.Uri.file(entry.file),
+                targetRange: new vscode.Range(position, position)
+            });
         }
+        return defns;
     }
 
     /**
@@ -617,8 +582,7 @@ export class HOLExtensionContext implements vscode.CompletionItemProvider {
         document: vscode.TextDocument,
         _token: vscode.CancellationToken,
     ) {
-        return this.holIDE?.documentEntries(document)
-            .map((entry) => entryToSymbol(entry));
+        return this.holIDE?.documentEntries(document).map(entryToSymbol);
     }
 
     /**
@@ -630,7 +594,7 @@ export class HOLExtensionContext implements vscode.CompletionItemProvider {
     ) {
         const symbols: vscode.SymbolInformation[] = [];
         const matcher = new RegExp(query, "i" /* ignoreCase */);
-        this.holIDE?.allEntries().forEach((entry) => {
+        this.holIDE?.forEachEntry(entry => {
             if (matcher.test(entry.name)) {
                 symbols.push(entryToSymbol(entry));
             }
@@ -655,9 +619,9 @@ export class HOLExtensionContext implements vscode.CompletionItemProvider {
         const word = document.getText(wordRange);
         const completions: vscode.CompletionItem[] = [];
         const matcher = new RegExp(word, "i" /* ignoreCase */);
-        this.holIDE?.allEntries().forEach((entry) => {
+        this.holIDE?.forEachEntry(entry => {
             if (matcher.test(entry.name) &&
-                isAccessibleEntry(entry, this.holIDE!.imports, document)) {
+                isAccessibleEntry(entry, this.holIDE!.imports[document.uri.toString()], document)) {
                 completions.push(entryToCompletionItem(entry));
             }
         });

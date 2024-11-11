@@ -1,21 +1,25 @@
 {
-  "comments":{
+  "comments": {
     "blockComment": ["(*", "*)"]
   },
   "brackets": [
     ["(", ")"],
     ["[", "]"],
-    ["{", "}"]
+    ["{", "}"],
+    ["let", "end"],
+    ["local", "end"],
+    ["struct", "end"],
+    ["sig", "end"]
   ],
   "autoClosingPairs": [
-    {"open": "(", "close": ")"},
-    {"open": "[", "close": "]"},
-    {"open": "{", "close": "}"},
-    {"open": "\"", "close": "\"", "notIn": ["string"]},
-    {"open": "`", "close": "`", "notIn": ["string"]},
-    {"open": "‘", "close": "’", "notIn": ["string"]},
-    {"open": "“", "close": "”", "notIn": ["string"]},
-    {"open": "«", "close": "»"}
+    { "open": "(", "close": ")" },
+    { "open": "[", "close": "]" },
+    { "open": "{", "close": "}" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] },
+    { "open": "`", "close": "`", "notIn": ["string"] },
+    { "open": "‘", "close": "’", "notIn": ["string"] },
+    { "open": "“", "close": "”", "notIn": ["string"] },
+    { "open": "«", "close": "»" }
   ],
   "surroundingPairs": [
     ["(", ")"],

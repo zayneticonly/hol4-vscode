@@ -7,13 +7,20 @@
       "name": "comment.block.hol",
       "begin": "\\(\\*",
       "end": "\\*\\)",
-      "patterns": [
-        { "include": "#comments" }
-      ]
+      "patterns": [{ "include": "#comments" }]
     },
     "escaped-chars": {
-      "name": "constant.character.escape.ml",
-      "match": "\\\\."
+      "patterns": [
+        {
+          "name": "constant.character.escape.ml",
+          "match": "\\\\([\\t-\\r ]*\\\\|[abtnvfr\\\"]|\\^[@-_]|[0-2][0-9]{2}|u[0-9a-fA-F]{4})"
+        },
+        {
+          "name": "constant.character.escape.ml",
+          "begin": "\\\\[\\t-\\r ]",
+          "end": "\\\\"
+        }
+      ]
     },
     "identifier": {
       "name": "entity.name.identifier.ml",
@@ -23,13 +30,13 @@
       "name": "string.quoted.double.ml",
       "begin": "\"",
       "end": "\"",
-      "patterns": [{"include": "#escaped-chars"}]
+      "patterns": [{ "include": "#escaped-chars" }]
     },
     "ml-char": {
       "name": "string.quoted.char.ml",
       "begin": "#\"",
       "end": "\"",
-      "patterns": [{"include": "#escaped-chars"}]
+      "patterns": [{ "include": "#escaped-chars" }]
     },
     "number": {
       "name": "constant.numeric.integer.ml",
@@ -60,9 +67,7 @@
       "endCaptures": {
         "0": { "name": "string.quoted.termquote.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" }
-      ]
+      "patterns": [{ "include": "#hol-term" }]
     },
     "term-quote-unicode-single": {
       "begin": "‘",
@@ -73,9 +78,7 @@
       "endCaptures": {
         "0": { "name": "string.quoted.termquote.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" }
-      ]
+      "patterns": [{ "include": "#hol-term" }]
     },
     "term-quote-unicode-double": {
       "begin": "“",
@@ -86,9 +89,7 @@
       "endCaptures": {
         "0": { "name": "string.quoted.termquote.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" }
-      ]
+      "patterns": [{ "include": "#hol-term" }]
     },
     "hol-binder": {
       "match": "([∀λ∃\\!\\?]|∃\\!|\\?\\!|some)\\s*([^\\.]+)\\s*(\\.)",
@@ -121,15 +122,15 @@
     "hol-term": {
       "patterns": [
         { "include": "#comments" },
-        { "include": "#ml-string"},
-        { "include": "#ml-char"},
+        { "include": "#ml-string" },
+        { "include": "#ml-char" },
         { "include": "#number" },
         { "include": "#number-float" },
         { "include": "#hol-binder" },
         { "include": "#hol-connective" },
         { "include": "#hol-special" },
         { "include": "#hol-constructor" },
-        { "include": "#hol-keywords"},
+        { "include": "#hol-keywords" },
         { "include": "#hol-constants" }
       ]
     },
@@ -148,52 +149,46 @@
         { "include": "#term-quote-unicode-double" },
         { "include": "#tactical" },
         { "include": "#cheat" },
-        { "include": "#tactics"}
+        { "include": "#tactics" }
       ]
     },
     "rule-label": {
       "match": "^(\\[)([~\\w_']*)(:\\])",
       "captures": {
-        "2": {"name": "entity.name.tag.rule-label.hol markup.underline"}
+        "2": { "name": "entity.name.tag.rule-label.hol markup.underline" }
       }
     },
     "datatype": {
       "begin": "^(Datatype):",
       "end": "^End",
       "beginCaptures": {
-        "1": {"name": "keyword.other.datatype.hol"}
+        "1": { "name": "keyword.other.datatype.hol" }
       },
       "endCaptures": {
-        "0": {"name": "keyword.other.datatype-end.hol"}
+        "0": { "name": "keyword.other.datatype-end.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" }
-      ]
+      "patterns": [{ "include": "#hol-term" }]
     },
     "definition": {
       "begin": "^(Definition)\\s+([\\w_']*)(\\[([^\\]]*)\\])?(:)",
       "end": "^(Termination|End)",
       "beginCaptures": {
-        "1": {"name": "keyword.other.definition.hol"},
-        "2": {"name": "entity.name.function.theorem.hol"},
-        "4": {"name": "entity.name.tag.attribute.hol"}
+        "1": { "name": "keyword.other.definition.hol" },
+        "2": { "name": "entity.name.function.theorem.hol" },
+        "4": { "name": "entity.name.tag.attribute.hol" }
       },
       "endCaptures": {
-        "0": {"name": "keyword.other.def-end.hol"}
+        "0": { "name": "keyword.other.def-end.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" }
-      ]
+      "patterns": [{ "include": "#hol-term" }]
     },
     "termination": {
       "begin": "(?<=^Termination)",
       "end": "^End",
       "endCaptures": {
-        "0": {"name": "keyword.other.qed.hol"}
+        "0": { "name": "keyword.other.qed.hol" }
       },
-      "patterns": [
-        { "include": "#non-standard-ml" }
-      ]
+      "patterns": [{ "include": "#non-standard-ml" }]
     },
     "inductive": {
       "begin": "^((?:Co)?Inductive)\\s+([\\w_']*)(:)",
@@ -203,45 +198,38 @@
         "2": { "name": "entity.name.function.relation.hol" }
       },
       "endCaptures": {
-        "0" : { "name": "keyword.other.def-end.hol" }
+        "0": { "name": "keyword.other.def-end.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" },
-        { "include": "#rule-label" }
-      ]
+      "patterns": [{ "include": "#hol-term" }, { "include": "#rule-label" }]
     },
     "theorem-assign": {
       "match": "^(Theorem|Triviality|Type|Overload)\\s+([\\w_']*)(\\[([^\\]]*)\\])?\\s*(=)",
       "captures": {
-        "1": {"name": "keyword.other.theorem.hol"},
-        "2": {"name": "entity.name.theorem.hol"},
-        "4": {"name": "entity.name.tag.attribute.hol"}
+        "1": { "name": "keyword.other.theorem.hol" },
+        "2": { "name": "entity.name.theorem.hol" },
+        "4": { "name": "entity.name.tag.attribute.hol" }
       }
     },
     "theorem-proof": {
       "begin": "^(Theorem|Triviality)\\s+([\\w_']*)(\\[([^\\]]*)\\])?(:)",
       "end": "^Proof",
       "beginCaptures": {
-        "1": {"name": "keyword.other.theorem.hol"},
-        "2": {"name": "entity.name.theorem.hol"},
-        "4": {"name": "entity.name.tag.attribute.hol"}
+        "1": { "name": "keyword.other.theorem.hol" },
+        "2": { "name": "entity.name.theorem.hol" },
+        "4": { "name": "entity.name.tag.attribute.hol" }
       },
       "endCaptures": {
-        "0": {"name": "keyword.other.proof.hol"}
+        "0": { "name": "keyword.other.proof.hol" }
       },
-      "patterns": [
-        { "include": "#hol-term" }
-      ]
+      "patterns": [{ "include": "#hol-term" }]
     },
     "proof-qed": {
       "begin": "(?<=^Proof)",
       "end": "^QED",
       "endCaptures": {
-        "0": {"name": "keyword.other.qed.hol"}
+        "0": { "name": "keyword.other.qed.hol" }
       },
-      "patterns": [
-        { "include": "#non-standard-ml" }
-      ]
+      "patterns": [{ "include": "#non-standard-ml" }]
     },
     "tactical": {
       "name": "keyword.control.tactical.ml",
