@@ -296,6 +296,10 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Show raw input/output in console view"
+                },
+                "hol4-mode.holdir": {
+                    "type": "string",
+                    "description": "Set HOL installation directory"
                 }
             }
         }

@@ -32,18 +32,19 @@ let hol4selector: vscode.DocumentSelector = {
  * @returns An extension context if successful, or `undefined` otherwise.
  */
 function initialize(context: vscode.ExtensionContext): HOLExtensionContext | undefined {
-    log('Attempting to determine HOLDIR.');
-
-    let holPath;
-    if ((holPath = process.env['HOLDIR'])) {
-        log(`HOLDIR is set to ${holPath}`);
-    } else {
-        vscode.window.showErrorMessage('HOL4 mode: HOLDIR environment variable not set');
-        error('Unable to read HOLDIR environment variable, exiting');
-        return;
+    let holPath = vscode.workspace.getConfiguration('hol4-mode').get<string>('HOLDIR');
+    if (!holPath) {
+        holPath = process.env['HOLDIR'];
+        if (holPath === undefined) {
+            vscode.window.showErrorMessage('HOL4 mode: HOLDIR environment variable not set');
+            error('Unable to read HOLDIR environment variable, exiting');
+            return;
+        }
+    } else if (holPath.startsWith('$')) {
+        holPath = process.env[holPath.slice(1)] ?? holPath;
     }
 
-    let holIDE;
+    let holIDE: HOLIDE | undefined;
     if (vscode.workspace.getConfiguration('hol4-mode').get('indexing')
         && vscode.workspace.workspaceFolders?.length) {
         // Get the path to the current workspace root. This class is constructed

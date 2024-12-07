@@ -233,7 +233,7 @@
     },
     "tactical": {
       "name": "keyword.control.tactical.ml",
-      "match": "(\\\\\\\\|THEN[1]?|>>|>-|>~|by|suffices_by)"
+      "match": "\\b(\\\\\\\\|THEN[1]?|>>|>-|>~|by|suffices_by)\\b"
     },
     "tactics": {
       "name": "support.function.tactic.ml",
