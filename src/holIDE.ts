@@ -134,10 +134,13 @@ export class HOLIDE {
                 'help/src-sml/ParseDoc.sig',
                 'help/src-sml/ParseDoc.sml',
             ].map(f => path.join(holPath, f)),
-            ...['holide.sml', 'vscode.sml'].map(f => context.asAbsolutePath(path.join('src', f))),
+            ...[
+                'holide.sml', 'vscode.sml', 'setup.sml'
+            ].map(f => context.asAbsolutePath(path.join('src', f))),
         ]) {
             this.prelude += `val _ = use ${escapeMLString(file)};\n`;
         }
+        this.prelude += `structure VSCode = VSCodeProto;\n`;
         this.postPrelude = 'val _ = HOL_IDE.postPrelude ();\n';
 
         // Collect all `open` declarations in the current document.
@@ -377,47 +380,55 @@ export class HOLIDE {
         return this.servers[uri] = server;
     }
 
+    async quietly(server: HolServer, ...s: string[]) {
+        const response = await server.request(...s);
+        if (this.loadingSpinner) this.loadingSpinner.tooltip = undefined;
+        if (response) {
+            log(`server was noisy: \n${response}`);
+            const start = response.indexOf('error:');
+            if (start >= 0) {
+                const error = response.substring(start);
+                if (this.loadingSpinner) {
+                    this.loadingSpinner.text = '$(error) HOL load failed'
+                    this.loadingSpinner.tooltip = error
+                    this.loadingSpinner.backgroundColor =
+                        new vscode.ThemeColor('statusBarItem.errorBackground')
+                }
+                throw error;
+            }
+        }
+    }
+
     async startServer(document: vscode.TextDocument): Promise<HolServer> {
         const server = this.server(document);
         await server.ensureRunning(async () => {
             const text = document.getText();
-            const imports: string[] = [];
-            getImports(text, s => imports.push(s));
+            await this.quietly(server, this.prelude,
+                `val _ = VSCode.filename := ${escapeMLString(document.fileName)};\n`);
+            const imports: string[] = await server.requestJSON(
+                `val _ = VSCode.holdep ${escapeMLString(text)};\n`);
             if (this.loadingSpinner) {
                 this.loadingSpinner.text = `$(loading~spin) Loading ${pluralize(imports.length, 'module')}...`;
                 this.loadingSpinner.tooltip = `Loading ${imports.join(', ')}`;
                 this.loadingSpinner.show();
             }
-            const loads = imports.map(s => `val _ = load "${s}" handle _ => ();\n`);
+
+            const loads = imports.map(s => `val _ = qload "${s}" handle _ => ();\n`);
             if (document.fileName.endsWith('.sml') && !document.fileName.endsWith('Script.sml')) {
                 const sigfile = document.fileName.substring(0, document.fileName.length - 4) + '.sig';
                 if (fs.existsSync(sigfile)) {
                     loads.push(`val _ = use "${path.basename(sigfile)}";\n`);
                 }
             }
-            const response = await server.request(this.prelude, ...loads, this.postPrelude);
+            await this.quietly(server, ...loads, this.postPrelude);
             if (this.loadingSpinner) this.loadingSpinner.tooltip = undefined;
-            if (response) {
-                log(`server was noisy: \n${response}`);
-                const start = response.indexOf('error:');
-                if (start >= 0) {
-                    const error = response.substring(start);
-                    if (this.loadingSpinner) {
-                        this.loadingSpinner.text = '$(error) HOL load failed'
-                        this.loadingSpinner.tooltip = error
-                        this.loadingSpinner.backgroundColor =
-                            new vscode.ThemeColor('statusBarItem.errorBackground')
-                    }
-                    throw error;
-                }
-            }
         });
         return server;
     }
 
     async compileDocument(server: HolServer, document: vscode.TextDocument): Promise<void> {
         if (server.lastVersion != document.version) {
-            // console.log(Date.now(), `setFileContents`);
+            console.log(Date.now(), `setFileContents`);
             this.diagState[document.uri.toString()] = [];
             await server.setFileContents(document.getText(), document.version);
         }
@@ -462,19 +473,36 @@ export class HOLIDE {
         for (const [origin, target] of await server.gotoDefinition(pos)) {
             const originSelectionRange = server.utf8ToRange(origin);
             if ('file' in target) {
-                const lineNr = target.line - 1;
+                let lineNr = target.line;
+                let line = '';
                 let search = document.getText(originSelectionRange);
                 search = search.substring(search.lastIndexOf('.') + 1);
                 const buffer = await fs.promises.readFile(target.file);
-                let start = 0; let end = 0; let i = 0;
-                for (let i = 0; ; i++) {
-                    end = buffer.indexOf(0x0a, start);
-                    if (end < 0) { end = buffer.length; break; }
-                    if (i >= lineNr) break;
-                    start = end + 1;
+                let start = 0; let end = 0;
+                let char = -1;
+                if (lineNr !== undefined) {
+                    for (let i = 0; ; i++) {
+                        end = buffer.indexOf(0x0a, start);
+                        if (end < 0) { end = buffer.length; break; }
+                        if (i >= lineNr) break;
+                        start = end + 1;
+                    }
+                    line = buffer.toString('utf8', start, end);
+                    char = line.search(search);
+                } else {
+                    let line0 = '';
+                    for (lineNr = 0; ; lineNr++) {
+                        end = buffer.indexOf(0x0a, start);
+                        const last = end < 0;
+                        if (last) end = buffer.length;
+                        line = buffer.toString('utf8', start, end);
+                        if (lineNr == 0) line0 = line;
+                        char = line.search(search);
+                        if (char >= 0 || last) break;
+                        start = end + 1;
+                    }
+                    if (char < 0) { lineNr = 0; line = line0; }
                 }
-                const line = buffer.toString('utf8', start, end);
-                const char = line.search(search);
                 results.push({
                     originSelectionRange,
                     targetUri: vscode.Uri.file(target.file),
@@ -611,6 +639,7 @@ function findExtFiles(directory: string, ext: string, smlFiles: string[] = []): 
 export const getImports = (() => {
     const importRegex = /^\s*(local\s*)?open\b/mg;
     const identRegex = /\s+([a-zA-Z][a-zA-Z0-9_']*)\b/my;
+    const moduleRegex = /\b([a-zA-Z][a-zA-Z0-9_']*)\.[a-zA-Z][a-zA-Z0-9_']*\b/g;
     const semiRegex = /[\s;]*/my;
     const keywords = new Set([
         'datatype', 'local', 'nonfix', 'prim_val', 'type', 'val', 'end', 'exception',
@@ -639,6 +668,9 @@ export const getImports = (() => {
             end = semiRegex.lastIndex;
             onOpen(start, end);
             importRegex.lastIndex = end;
+        }
+        while ((match = moduleRegex.exec(text))) {
+            onImport(match[1]);
         }
     }
 })();

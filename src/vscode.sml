@@ -1,7 +1,10 @@
-structure VSCode =
+(* This structure is renamed to VSCode by the API. Otherwise, you wouldn't be able to use this
+extension to edit this file itself. *)
+structure VSCodeProto =
 struct
 
 val textWidth = ref 100
+val printDepth = ref 100
 
 type encode = (string->unit)->unit
 fun encodeOut str (print:string->unit) = print str
@@ -61,8 +64,10 @@ fun encodeJsonArray encode ls print = case ls of
 fun encodeJsonPair enc1 enc2 (a, b) print =
   ((print "[":unit); (enc1 a print:unit); print ","; (enc2 b print:unit); print "]")
 
+fun encodeJsonPair2 enc = encodeJsonPair enc enc
+
 fun encodeJsonLocation encode ({startPosition,endPosition,...}:PolyML.location) =
-  encodeJsonPair encode encode (startPosition, endPosition)
+  encodeJsonPair2 encode (startPosition, endPosition)
 
 fun printToString encode suff = let
   val buf = ref []
@@ -180,11 +185,16 @@ fun encodeJsonSection _ _ = raise Bind
 fun parseFile _ = NONE
 end *)
 
+type parse_data =
+  int * PolyML.parseTree list *
+  ((int * int) * (int * int) * Preterm.preterm * Pretype.Env.t) list
+val emptyParseData: parse_data = (0, [], [])
+
+val filename = ref ""
 val currentThread = ref 0
-val currentCompilation = ref
-  (NONE : (((int * PolyML.parseTree list) ref * (string * int vector)) * Thread.thread) option)
-val lastTrees = ref ((0, []), ("", Vector.fromList []))
-val _ = HOL_IDE.prelude ();
+val currentCompilation =
+  ref (NONE : ((parse_data ref * (string * int vector)) * Thread.thread) option)
+val lastTrees = ref (emptyParseData, ("", Vector.fromList []))
 
 val printToAsyncChannel = let
   val (suff, printer) = let
@@ -235,22 +245,62 @@ fun getLineCol lines index = let
 fun fromLineCol lines (line, col) =
   if line = 0 then col else Vector.sub (lines, line - 1) + col
 
-fun encodeJsonPosLC lines = encodeJsonPair encodeJsonInt encodeJsonInt o getLineCol lines
+fun encodeJsonPosLC lines = encodeJsonPair2 encodeJsonInt o getLineCol lines
+val encodeJsonPos2LC = encodeJsonPair2 o encodeJsonPosLC
 val encodeJsonLocLC = encodeJsonLocation o encodeJsonPosLC
+
+fun holdep text = let
+  val {read, ...} = HolParser.stringToReader true text
+  val mods = Binarymap.foldr (fn (a, _, r) => a :: r) [] (Holdep_tokens.reader_deps ("", read))
+    handle e => []
+  in encodeJsonArray encodeJsonString mods print end;
+
+fun exceptionMessage (exn: exn) =
+  PolyML.PrettyBlock(0, false, [], [
+    PolyML.PrettyBlock(0, false, [], [PolyML.PrettyString "Exception"]),
+    PolyML.PrettyBreak(1, 3),
+    PolyML.prettyRepresentation(exn, !printDepth),
+    PolyML.PrettyBreak(1, 3),
+    PolyML.PrettyString "raised"])
+
+fun get_locn (locn.Loc_Near loc) = get_locn loc
+  | get_locn (locn.Loc (locn.LocA start, locn.LocA (l,c))) = SOME (start, (l,c+1))
+  | get_locn _ = NONE
 
 fun setFileContents text = let
   val () = case !currentCompilation of
       SOME ((trees, text), thread) => (
       Thread.interrupt thread;
       currentCompilation := NONE;
-      case !trees of (_, []) => () | trees => lastTrees := (trees, text))
+      case !trees of (_, [], _) => () | trees => lastTrees := (trees, text))
     | NONE => ()
   val lines = mkLineCounter text
-  val trees = ref (0, [])
+  val trees = ref emptyParseData
   fun compileThread () = let
     val id = !currentThread + 1
     val () = currentThread := id
-    val () = HOL_IDE.initialize text {
+    fun printError hard pos msg = printToAsyncChannel id (fn print => (
+      print "{\"kind\":\"error\"";
+      print ",\"hard\":"; print (if hard then "true" else "false");
+      print ",\"pos\":"; encodeJsonPos2LC lines pos print;
+      print ",\"msg\":"; encodeJsonPretty msg print;
+      print "}"))
+    open HolParser.Simple
+    (* fun addq q = case !trees of (p, ts, qs) => trees := (p, ts, q :: qs) *)
+    val _ = PolyML.print_depth 100
+    val _ = Preterm.typecheck_listener := (fn ptm => fn env =>
+      case get_locn (Preterm.locn ptm) of
+        SOME (start, stop) =>
+        (case !trees of (p, ts, qs) => trees := (p, ts, (start, stop, ptm, env) :: qs))
+      | _ => ())
+    val () = HOL_IDE.initialize {
+      text = text,
+      filename = !filename,
+      parseError = fn pos => fn s => printToAsyncChannel id (fn print => (
+        print "{\"kind\":\"error\",\"hard\":true";
+        print ",\"pos\":"; encodeJsonPos2LC lines pos print;
+        print ",\"msg\":"; encodeJsonString s print;
+        print "}")),
       compilerOut = fn s => printToAsyncChannel id (fn print => (
         print "{\"kind\":\"compilerOut\"";
         print ",\"body\":"; encodeJsonString s print;
@@ -260,17 +310,21 @@ fun setFileContents text = let
         print ",\"body\":"; encodeJsonString s print;
         print "}")),
       progress = fn i => printToAsyncChannel id (fn print => (
-        case !trees of (_, ts) => trees := (i, ts);
+        case !trees of (_, ts, qs) => trees := (i, ts, qs);
         print "{\"kind\":\"compileProgress\"";
         print ",\"pos\":"; encodeJsonPosLC lines i print;
         print "}")),
-      error = fn {hard, location, message, ...} => printToAsyncChannel id (fn print => (
-        print "{\"kind\":\"error\"";
-        print ",\"hard\":"; print (if hard then "true" else "false");
-        print ",\"pos\":"; encodeJsonLocLC lines location print;
-        print ",\"msg\":"; encodeJsonPretty message print;
-        print "}")),
-      parseTree = fn t => case !trees of (p, ts) => trees := (p, t :: ts)}
+      error = fn {hard, location = {startPosition, endPosition, ...}, message, ...} =>
+        printError hard (startPosition, endPosition) message,
+      runtimeExn = fn e =>
+        printError true
+          (case PolyML.Exception.exceptionLocation e of
+            NONE => (fn i => (i, i)) (#1 (!trees))
+          | SOME {startPosition, endPosition, ...} => (startPosition, endPosition))
+          (exceptionMessage e),
+      mlParseTree = fn t => case !trees of (p, ts, qs) => trees := (p, t :: ts, qs),
+      holParseTree = fn _ => ()
+    }
     val () = lastTrees := (!trees, (text, lines))
     val () = currentCompilation := NONE
     in printToAsyncChannel id (fn print => print "{\"kind\":\"compileCompleted\"}") end
@@ -306,12 +360,18 @@ datatype doc
 
 datatype hover
   = TypeHover of PolyML.location * PolyML.pretty
+  | HolTermHover of (int * int) * (int * int) * PolyML.pretty
   | DocHover of doc
 
 fun encodeJsonHover lines hover print = case hover of
     TypeHover (loc, value) => (
     print "{\"kind\":\"type\"";
     print ",\"pos\":"; encodeJsonLocLC lines loc print;
+    print ",\"value\":"; encodeJsonPretty value print;
+    print "}")
+  | HolTermHover (start, stop, value) => (
+    print "{\"kind\":\"type\"";
+    print ",\"pos\":"; encodeJsonPair2 (encodeJsonPair2 encodeJsonInt) (start, stop) print;
     print ",\"value\":"; encodeJsonPretty value print;
     print "}")
   | DocHover (DocText text) => (
@@ -378,36 +438,89 @@ fun helpLookup id validate = let
     handle Rebuild => (rebuildHelp (); loop ())
   in loop () end
 
+datatype preterm_or_pretype = PTM of Preterm.preterm list * Preterm.preterm | PTY of Pretype.pretype
+
+local
+  fun leLC (l,c) (l',c') = l <= l' andalso (l <> l' orelse c <= c')
+  fun fixup a NONE = a
+    | fixup a (SOME b) = if #1 a = #1 b then a else b
+  fun dest_near (locn.Loc_Near loc) = dest_near loc
+    | dest_near loc = loc
+in
+  fun navigateTo' startTarget endTarget = let
+    fun navigateToTy ty fail =
+      case get_locn locn.Loc_Unknown of (* FIXME Pretype.locn ty *)
+        SOME (start, stop) =>
+        if leLC start startTarget andalso leLC endTarget stop then
+          SOME (navigateToTyCore (start, stop) ty)
+        else fail ()
+      | _ => fail ()
+    and navigateToTys [] fail = fail ()
+      | navigateToTys (ty::tys) fail = navigateToTy ty (fn () => navigateToTys tys fail)
+    and navigateToTyCore pos ty =
+      fixup (pos, PTY ty) (case ty of
+        Pretype.Tyop {Args,...} => navigateToTys Args (fn () => NONE)
+      | _ => NONE)
+    fun navigateTo ls a fail =
+      case get_locn (Preterm.locn a) of
+        SOME (start, stop) =>
+        if leLC start startTarget andalso leLC endTarget stop then
+          SOME (navigateToCore (start, stop) ls a)
+        else fail ()
+      | _ => fail ()
+    and navigateToCore pos ls a =
+      fixup (pos, PTM (ls, a)) (case a of
+        Preterm.Var {Ty, ...} => navigateToTy Ty (fn () => NONE)
+      | Preterm.Const {Ty, ...} => navigateToTy Ty (fn () => NONE)
+      | Preterm.Overloaded {Ty, ...} => navigateToTy Ty (fn () => NONE)
+      | Preterm.Comb {Rand, Rator, ...} =>
+        navigateTo ls Rand (fn () => navigateTo ls Rator (fn () => NONE))
+      | Preterm.Abs {Bvar, Body, ...} =>
+        navigateTo ls Bvar (fn () => navigateTo (Bvar::ls) Body (fn () => NONE))
+      | Preterm.Constrained {Ptm, Ty, ...} =>
+        navigateTo ls Ptm (fn () => navigateToTy Ty (fn () => NONE))
+      | Preterm.Antiq _ => NONE
+      | Preterm.Pattern {Ptm, ...} => navigateTo ls Ptm (fn () => NONE))
+    fun navigateTo' [] = NONE
+      | navigateTo' ((start, stop, ptm, env) :: ds) =
+        if leLC start startTarget andalso leLC endTarget stop then
+          SOME (navigateToCore (start, stop) [] ptm, env)
+        else navigateTo' ds
+    in navigateTo' end
+end
+
 fun getState startTarget endTarget = let
   val state = case !currentCompilation of
-      SOME ((ref (stop, trees), (text, lines)), _) =>
+      SOME ((ref (stop, trees, ds), (text, lines)), _) =>
       if stop > 0 then let
         val offset = fromLineCol lines endTarget
-        in if offset <= stop then SOME (text, lines, offset, trees) else NONE end
+        in if offset <= stop then SOME (text, lines, offset, trees, ds) else NONE end
       else NONE
     | NONE => NONE
   val state = case state of
       NONE => let
-      val ((stop, trees), (text, lines)) = !lastTrees
+      val ((stop, trees, ds), (text, lines)) = !lastTrees
       in
         if stop > 0 then let
           val offset = fromLineCol lines endTarget
-          in if offset <= stop then SOME (text, lines, offset, trees) else NONE end
+          in if offset <= stop then SOME (text, lines, offset, trees, ds) else NONE end
         else NONE
       end
     | state => state
   in
     case state of
       NONE => NONE
-    | SOME (text, lines, endOffset, trees) => let
+    | SOME (text, lines, endOffset, trees, ds) => let
       val offset = {startOffset = fromLineCol lines startTarget, endOffset = endOffset}
-      in SOME (text, lines, offset, trees, HOL_IDE.navigateTo' trees offset) end
+      val ds = (navigateTo' startTarget endTarget ds)
+      val pt = HOL_IDE.navigateTo' trees offset
+      in SOME (text, lines, offset, trees, ds, pt) end
   end
 
 fun getHoverInfo startTarget endTarget =
   case getState startTarget endTarget of
     NONE => print "[]"
-  | SOME (text, lines, _, trees, pt) => let
+  | SOME (text, lines, _, trees, tm, pt) => let
     fun process loc props = let
       fun validate str = let
         fun look [] = false
@@ -459,16 +572,15 @@ fun getHoverInfo startTarget endTarget =
                   NONE => false
                 | SOME (_, props) => lookRefs props
             end
-          val depth = !PolyML.Compiler.printDepth
           val value = if isGlobalId then #lookupVal PolyML.globalNameSpace id else NONE
           in (SOME id, value, help) end
       open PolyML
-      val depth = !Compiler.printDepth
-      val ty = Option.map (fn ty => NameSpace.Values.printType (ty, depth, SOME globalNameSpace)) ty
+      val ty = Option.map (fn ty =>
+        NameSpace.Values.printType (ty, !printDepth, SOME globalNameSpace)) ty
       val value = case value of
           NONE => NONE
         | SOME value =>
-          case NameSpace.Values.print (value, depth) of
+          case NameSpace.Values.print (value, !printDepth) of
             PrettyString "" => NONE
           | otherwise => SOME otherwise
       val out = case (id, ty, value) of
@@ -493,22 +605,87 @@ fun getHoverInfo startTarget endTarget =
         case process loc props of
           [] => fromTree (HOL_IDE.moveUp pt)
         | out => out
-    in withPretty (fn () => encodeJsonArray (encodeJsonHover lines) (fromTree pt) print) end
+    fun fromTerm NONE = fromTree pt
+      | fromTerm (SOME ((_, PTY _), _)) = fromTree pt
+      | fromTerm (SOME (((start, stop), PTM (_, tm)), env)) =
+        case Preterm.typecheck NONE tm env of
+          errormonad.Some (_, tm) => let
+          val typp = Parse.pp_type_without_colon (type_of tm)
+          val _ = Globals.max_print_depth := 4
+          val tmpp = Parse.pp_term tm
+          val _ = Globals.max_print_depth := ~1
+          open PolyML
+          val pp = PrettyBlock(0, true, [], [tmpp, PrettyString ":", PrettyBreak(1, 2), typp])
+          in [HolTermHover (start, stop, pp)] end
+        | _ => fromTree pt
+    in withPretty (fn () => encodeJsonArray (encodeJsonHover lines) (fromTerm tm) print) end
 
 fun gotoDefinition target =
   case getState target target of
-    SOME (text, lines, _, _, SOME (origin, props)) => let
+    SOME (text, lines, _, _, tm, pt) => let
+    datatype position
+      = PolyLoc of PolyML.location
+      | FileLine of string * int option
+      | LineCol of (int * int) * (int * int)
     fun getDeclaredAt [] = NONE
       | getDeclaredAt (PolyML.PTdeclaredAt loc :: _) = SOME loc
       | getDeclaredAt (_ :: props) = getDeclaredAt props
-    val out = case getDeclaredAt props of NONE => [] | SOME loc => [(origin, loc)]
-    fun encodeJsonLocation (loc as {file, startLine, ...}) print =
-      if file = "" then encodeJsonLocLC lines loc print
-      else (
-        print "{\"file\":"; encodeJsonString file print;
-        print ",\"line\":"; encodeJsonInt startLine print;
-        print "}")
-    in encodeJsonArray (encodeJsonPair (encodeJsonLocLC lines) encodeJsonLocation) out print end
+    val out = case tm of
+        SOME ((loc, PTY ty), env) =>
+        (case Pretype.toTypeM ty env of
+          errormonad.Some (_, ty) => (let
+            val {Thy, Tyop, ...} = Type.dest_thy_type ty
+            (* TODO *)
+            in [] end
+            handle HOL_ERR _ => [])
+        | _ => [])
+      | SOME ((loc, PTM (bvs, tm)), env) =>
+        (case Preterm.typecheck NONE tm env of
+          errormonad.Some (_, tm) => (let
+            val (hd, _) = strip_comb tm
+            fun findVar [] = []
+              | findVar (bv::bvs) =
+                case Preterm.typecheck NONE bv env of
+                  errormonad.Some (_, tm) => if term_eq tm hd then
+                    case get_locn (Preterm.locn bv) of
+                      SOME tgt => [(LineCol loc, LineCol tgt)]
+                    | _ => []
+                  else findVar bvs
+                | _ => findVar bvs
+            in
+              if is_var hd then
+                findVar bvs
+              else if is_const hd then
+                case DefnBase.lookup_userdef hd of
+                  SOME {thmname,...} => (case DB.lookup thmname of
+                    SOME (_, {loc = DB.Located {scriptpath, linenum, ...}, ...}) =>
+                    [(LineCol loc,
+                      FileLine (holpathdb.subst_pathvars scriptpath, SOME (linenum - 1)))]
+                  | _ => [])
+                | NONE => []
+              else []
+            end
+            handle HOL_ERR _ => [])
+        | _ => [])
+      | _ => []
+    val out =
+      case (out, pt) of
+        ([], SOME (origin, props)) =>
+        (case getDeclaredAt props of NONE => [] | SOME loc => [(PolyLoc origin, PolyLoc loc)])
+      | _ => out
+    fun encodeJsonFileLine (file, startLine) print = (
+      print "{\"file\":"; encodeJsonString file print;
+      case startLine of
+        SOME n => (print ",\"line\":"; encodeJsonInt n print)
+      | NONE => ();
+      print "}")
+    val encodeJsonPosition = fn
+      PolyLoc (loc as {file, startLine, ...}) =>
+        if file = "" then encodeJsonLocLC lines loc
+        else encodeJsonFileLine (file, SOME (startLine - 1))
+      | FileLine fileLine => encodeJsonFileLine fileLine
+      | LineCol range => encodeJsonPair2 (encodeJsonPair2 encodeJsonInt) range
+    in encodeJsonArray (encodeJsonPair2 encodeJsonPosition) out print end
   | _ => print "[]"
 
 end;

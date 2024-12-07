@@ -18,12 +18,20 @@ type trees = PolyML.parseTree list
 val prelude: unit -> unit
 val postPrelude: unit -> unit
 
-val initialize: string ->
-    { compilerOut: string -> unit,
-      toplevelOut: string -> unit,
-      progress: int -> unit,
-      error: error -> unit,
-      parseTree: PolyML.parseTree -> unit} -> unit
+val compile: bool ref
+
+val initialize:
+  { text: string,
+    filename: string,
+    parseError: int * int -> string -> unit,
+    compilerOut: string -> unit,
+    toplevelOut: string -> unit,
+    progress: int -> unit,
+    error: error -> unit,
+    runtimeExn: exn -> unit,
+    mlParseTree: PolyML.parseTree -> unit,
+    holParseTree: HolParser.Simple.decl -> unit
+  } -> unit
 
 val moveUp: subtree -> subtree
 val moveDown: subtree -> subtree
@@ -35,7 +43,7 @@ val navigateTo': trees -> {startOffset: int, endOffset: int} -> subtree
 
 val at: PolyML.parseTree list -> int list -> subtree
 
-datatype built = Built of (int * int) * built list
+datatype built = Built of (int * int) * PolyML.ptProperties list * built list
 val build: PolyML.parseTree -> built
 val buildList: PolyML.parseTree option -> built list
 
@@ -49,42 +57,78 @@ type error =
 type subtree = PolyML.parseTree option
 type trees = PolyML.parseTree list
 
-fun prelude () = quiet_load := true
-fun postPrelude () = (PolyML.print_depth 100; quiet_load := false)
+fun prelude () = Tactical.set_prover (fn (t, _) => mk_oracle_thm "fast_proof" ([], t))
 
-fun initialize text {compilerOut, toplevelOut, progress, error, parseTree} = let
-  val qstate = QuoteFilter.UserDeclarations.newstate
-    {inscriptp = true, quotefixp = false, scriptfilename = ""}
+fun postPrelude () = ()
+
+val compile = ref true
+
+fun initialize {
+  text, filename, parseError, compilerOut, toplevelOut, progress, error,
+  runtimeExn, mlParseTree, holParseTree
+} = let
+  datatype Chunk
+    = RegularChunk of int * substring
+    | FlatChunk of int option * substring
+    | EOFChunk
+
   val sr = ref text
-  val read0 = QuoteFilter.makeLexer (fn _ => !sr before sr := "") qstate
-  fun read1 pos = case read0 () of
-      (_, "") => (pos, "")
-    | (start, tok) => (start - 1, tok)
-  fun process (cur as (start, tok)) =
-    if tok = "" then (cur, NONE)
-    else (cur, SOME (read1 (start + String.size tok)))
-  val curToken = ref (process (read1 0))
-  val position = ref 0
-  fun read2 () = let
-    val ((start, s), next) = !curToken
-    val i = !position
-    in
-      if i < String.size s then
-        (position := i+1; SOME (String.sub (s, i)))
-      else case next of
-          NONE => NONE
-        | SOME next => (curToken := process next; position := 0; read2 ())
-    end
+  val queue = ref []
+  fun push chunk = queue := chunk :: !queue
+  fun encode f (i, s) = let
+    val j = i + #2 (Substring.base s)
+    in f (fn s => push (FlatChunk (SOME j, Substring.full s))) (i, s) end
+  val {feed, regular, finishThmVal, doDecl, ...} =
+    HolParser.ToSML.mkPushTranslatorCore {
+      filename = filename, parseError = parseError,
+      read = fn _ => !sr before sr := ""
+    } {
+      regular = push o RegularChunk,
+      aux = fn s => push (FlatChunk (NONE, Substring.full s)),
+      strstr = encode HolParser.ToSML.strstr,
+      strcode = encode HolParser.ToSML.strcode
+    }
+  val atEnd = ref false
+  val pos = ref 0
+  fun readChunk () =
+    case !queue of
+      s :: rest => (queue := rest; s)
+    | [] => if !atEnd then EOFChunk else (
+      case feed () of
+        HolParser.Simple.TopDecl d => (holParseTree d; pos := doDecl true (!pos) d)
+      | HolParser.Simple.EOF p =>
+        (regular (!pos, p); finishThmVal (); pos := p; atEnd := true);
+      queue := rev (!queue);
+      readChunk ())
+
+  datatype State
+    = Reading of (int * bool) * int * int * string
+    | EOF of int
+  fun toState start = fn
+      EOFChunk => EOF start
+    | RegularChunk (base, ss) => let
+      val (s, lo, len) = Substring.base ss
+      in Reading ((base, true), lo, lo + len, s) end
+    | FlatChunk (i, ss) => let
+      val (s, lo, len) = Substring.base ss
+      in Reading ((Option.getOpt (i, start), false), lo, lo + len, s) end
+  val curToken = ref (toState 0 (readChunk ()))
+  fun read2 () =
+    case !curToken of
+      EOF _ => NONE
+    | Reading (base, lo, hi, s) =>
+      if lo+1 < hi then
+        (curToken := Reading (base, lo+1, hi, s); SOME (String.sub(s, lo)))
+      else (
+        curToken := toState (if #2 base then #1 base + hi else #1 base) (readChunk ());
+        if lo+1 = hi then SOME (String.sub(s, lo)) else read2 ())
   fun getOffset () = case !curToken of
-      ((start, _), NONE) => start
-    | ((start, tok), SOME (stop, _)) =>
-      if stop = start + String.size tok then start + !position else
-      if !position = String.size tok then stop else start
-  val errors = ref []
+      Reading ((base, flat), lo, hi, s) => if flat then base + lo else base
+    | EOF pos => pos
   val serial = ref 1
   val result = ref []
   fun ptFn NONE = ()
-    | ptFn (SOME pt) = parseTree pt
+    | ptFn (SOME pt) = mlParseTree pt
   fun codeFn NONE () = ()
     | codeFn (SOME code) () = let
       val {fixes, values, structures, signatures, functors, types} = code ()
@@ -92,7 +136,7 @@ fun initialize text {compilerOut, toplevelOut, progress, error, parseTree} = let
       in enter #enterFix fixes; enter #enterType types; enter #enterSig signatures;
          enter #enterStruct structures; enter #enterFunct functors; enter #enterVal values end
   open PolyML.Compiler
-  val parameters = noCompile @ [
+  val parameters = (if !compile then [] else noCompile) @ [
     CPOutStream compilerOut,
     CPPrintStream toplevelOut,
     CPErrorMessageProc error,
@@ -102,8 +146,9 @@ fun initialize text {compilerOut, toplevelOut, progress, error, parseTree} = let
     CPBindingSeq (fn () => (fn n => n before serial := n + 1) (!serial))];
   fun loop () = (
     progress (getOffset ());
-    if #2 (#1 (!curToken)) = "" then ()
-    else (PolyML.compiler (read2, parameters) (); loop ()))
+    case !curToken of
+      EOF _ => ()
+    | _ => ((PolyML.compiler (read2, parameters) () handle e => runtimeExn e); loop ()))
   in loop () end;
 
 fun moveUp NONE = NONE
@@ -147,10 +192,10 @@ fun at ls (n::rest) =
     in at' rest (SOME (List.nth (ls, n))) end
   | at _ _ = raise Match
 
-datatype built = Built of (int * int) * built list
+datatype built = Built of (int * int) * PolyML.ptProperties list * built list
 
-fun build (tree as ({startPosition, endPosition, ...}, _)) =
-  Built ((startPosition, endPosition), buildList (moveDown (SOME tree)))
+fun build (tree as ({startPosition, endPosition, ...}, props)) =
+  Built ((startPosition, endPosition), props, buildList (moveDown (SOME tree)))
 
 and buildList NONE = []
   | buildList (tree as SOME t) = build t :: buildList (moveRight tree)
