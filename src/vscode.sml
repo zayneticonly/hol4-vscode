@@ -627,9 +627,6 @@ fun gotoDefinition target =
       = PolyLoc of PolyML.location
       | FileLine of string * int option
       | LineCol of (int * int) * (int * int)
-    fun getDeclaredAt [] = NONE
-      | getDeclaredAt (PolyML.PTdeclaredAt loc :: _) = SOME loc
-      | getDeclaredAt (_ :: props) = getDeclaredAt props
     val out = case tm of
         SOME ((loc, PTY ty), env) =>
         (case Pretype.toTypeM ty env of
@@ -668,10 +665,34 @@ fun gotoDefinition target =
             handle HOL_ERR _ => [])
         | _ => [])
       | _ => []
+    fun fromProps [] r = r
+      | fromProps (PolyML.PTdeclaredAt loc :: rest) (file, ty, _) = (file, ty, SOME loc)
+      | fromProps (PolyML.PTstructureAt {file,...} :: props) (_, ty, df) =
+        fromProps props (SOME file, ty, df)
+      | fromProps (PolyML.PTtype ty :: props) (file, _, df) = fromProps props (file, SOME ty, df)
+      | fromProps (_ :: props) r = fromProps props r
     val out =
       case (out, pt) of
         ([], SOME (origin, props)) =>
-        (case getDeclaredAt props of NONE => [] | SOME loc => [(PolyLoc origin, PolyLoc loc)])
+        (case fromProps props (NONE, NONE, NONE) of
+          (_, _, NONE) => []
+        | (file, ty, SOME loc) => let
+          val newLoc = case (file, ty) of
+            (SOME file, SOME _) => let
+            val {startPosition, endPosition, ...} = origin
+            val id = String.substring (text, startPosition, endPosition - startPosition)
+            val basename = String.extract (file, lastIndexOf #"/" file + 1, NONE)
+            val stem = String.extract (basename, 0, SOME (lastIndexOf #"." basename))
+            in
+              if 6 <= size stem andalso String.extract (stem, size stem - 6, NONE) = "Theory" then
+                case DB.lookup {Name = id, Thy = String.extract (stem, 0, SOME (size stem - 6))} of
+                  SOME (_, {loc = DB.Located {scriptpath, linenum, ...}, ...}) =>
+                  FileLine (holpathdb.subst_pathvars scriptpath, SOME (linenum - 1))
+                | _ => PolyLoc loc
+              else PolyLoc loc
+            end
+          | _ => PolyLoc loc
+          in [(PolyLoc origin, newLoc)] end)
       | _ => out
     fun encodeJsonFileLine (file, startLine) print = (
       print "{\"file\":"; encodeJsonString file print;
