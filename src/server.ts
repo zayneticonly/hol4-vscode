@@ -158,6 +158,10 @@ export class HolServer {
         return this.receive();
     }
 
+    async requestJSON<T>(...s: string[]): Promise<T> {
+        return JSON.parse(await this.request(...s));
+    }
+
     stop() {
         if (this.child?.pid) {
             process.kill(-this.child.pid, 'SIGTERM');
@@ -196,14 +200,13 @@ export class HolServer {
         if (result) log(`setFileContents was noisy:\n${result}`);
     }
 
-    async getHoverInfo([[sline, scol], [eline, ecol]]: Location): Promise<HoverInfo[]> {
-        const s = await this.request(`val _ = VSCode.getHoverInfo (${sline}, ${scol}) (${eline}, ${ecol})`);
-        return JSON.parse(s)
+    getHoverInfo([[sline, scol], [eline, ecol]]: Location): Promise<HoverInfo[]> {
+        return this.requestJSON(
+            `val _ = VSCode.getHoverInfo (${sline}, ${scol}) (${eline}, ${ecol})`);
     }
 
-    async gotoDefinition([line, col]: Position): Promise<DefinitionInfo[]> {
-        const s = await this.request(`val _ = VSCode.gotoDefinition (${line}, ${col})`);
-        return JSON.parse(s)
+    gotoDefinition([line, col]: Position): Promise<DefinitionInfo[]> {
+        return this.requestJSON(`val _ = VSCode.gotoDefinition (${line}, ${col})`);
     }
 
     utf8ToPosition(pos: Position): vscode.Position {

@@ -74,6 +74,6 @@ export type DocHover = {
 
 export type HoverInfo = TypeHover | DocTxtHover | DocHover;
 
-export type ExtLocation = { file: string, line: number };
+export type ExtLocation = { file: string, line?: number };
 
 export type DefinitionInfo = [origin: Location, target: Location | ExtLocation];

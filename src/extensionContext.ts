@@ -52,8 +52,8 @@ function processOpens(text: string): string {
         }
         quiet = q;
     }
-    const theories: string[] = [];
-    getImports(text, theories.push, (start, end) => {
+    const theoriesSet = new Set<string>();
+    getImports(text, s => theoriesSet.add(s), (start, end) => {
         const mid = text.substring(index, start);
         if (/[^\s;]/.test(mid)) setQuiet(false);
         buffer.push(mid);
@@ -61,8 +61,9 @@ function processOpens(text: string): string {
         buffer.push(text.substring(start, end));
         index = end;
     });
-    if (!theories) return text;
-    theories.sort();
+    if (!theoriesSet.size) return text;
+    const theories: string[] = [];
+    theoriesSet.forEach(s => theories.push(s));
 
     setQuiet(false);
     const banner = `val _ = print "Loading: ${theories.join(' ')} ...\\n";`;
@@ -565,7 +566,7 @@ export class HOLExtensionContext implements
             entry.name === word &&
             isAccessibleEntry(entry, this.holIDE!.imports[document.uri.toString()], document));
         const defns: vscode.DefinitionLink[] = (await promise?.catch()) ?? [];
-        if (entry) {
+        if (defns.length == 0 && entry) {
             const position = new vscode.Position(entry.line - 1, 0);
             defns.push({
                 targetUri: vscode.Uri.file(entry.file),

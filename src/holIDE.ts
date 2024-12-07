@@ -147,8 +147,10 @@ export class HOLIDE {
         let editor;
         if ((editor = vscode.window.activeTextEditor)) {
             const doc = editor.document;
+            const importsSet = new Set<string>();
+            getImports(removeComments(doc.getText()), i => importsSet.add(toImport(i)));
             const imports: string[] = [];
-            getImports(removeComments(doc.getText()), i => imports.push(toImport(i)));
+            importsSet.forEach(s => imports.push(s));
             this.imports[doc.uri.toString()] = imports;
             this.startServer(doc).then(server => this.compileDocument(server, doc));
         }
@@ -297,8 +299,10 @@ export class HOLIDE {
     }
 
     updateImports(document: vscode.TextDocument) {
+        const importsSet = new Set<string>();
+        getImports(removeComments(document.getText()), i => importsSet.add(toImport(i)));
         const imports: string[] = [];
-        getImports(removeComments(document.getText()), i => imports.push(toImport(i)));
+        importsSet.forEach(s => imports.push(s));
         this.imports[document.uri.toString()] = imports;
     }
 
