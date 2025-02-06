@@ -1,3 +1,4 @@
+import { workspace } from 'vscode';
 export const EXTENSION_ID = 'oskarabrahamsson.hol4-mode';
 export const KERNEL_ID = 'hol4';
 
@@ -9,6 +10,10 @@ export function log(message: string): void {
 /** Log an error with the 'hol-mode' prefix. */
 export function error(message: string): void {
     console.error(`!!! hol-mode: Error: ${message}`);
+}
+
+export function holdir(): string | undefined {
+    return workspace.getConfiguration('hol4-mode').get<string>('holdir');
 }
 
 /** Execute an async fn such that any concurrent calls block until the previous calls finish. */

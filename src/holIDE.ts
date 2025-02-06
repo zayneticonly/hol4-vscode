@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { log, error, pluralize } from './common';
+import { log, error, pluralize, holdir } from './common';
 import { escapeMLString, HolServer, manpageToMarkdown, prettyStringToMarkdown } from './server';
 import { Message } from './serverTypes';
 
@@ -605,13 +605,14 @@ function readDependencies(dir: string): string[] {
             }
         }
     }
-    return paths.map(p => {
-        if (p.startsWith('$')) {
-            const envVar = p.slice(1);
-            return process.env[envVar]!;
-        } else {
-            return p;
-        }
+    return paths.flatMap(p => {
+        if (!p.startsWith('$')) return [p];
+        const envVar = p.slice(1);
+        let val = envVar === 'HOLDIR' ? holdir() : undefined;
+        if (!val) val = process.env[envVar];
+        if (val) return val;
+        error(`environment variable \$${envVar} is not defined`);
+        return [];
     });
 }
 

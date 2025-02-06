@@ -1,11 +1,13 @@
 structure HOL_IDE = struct
   val noCompile: PolyML.Compiler.compilerParameters list = []
 end;
+(*
 let (* autoconf-like hack *)
   val s = "structure HOL_IDE = struct\nval noCompile = [PolyML.Compiler.CPNoCompile true]\nend"
   val i = ref 0
   fun read () = (SOME (String.sub (s, !i)) before i := !i + 1) handle Subscript => NONE
   in PolyML.compiler (read, []) () handle _ => () end; (* <- important semicolon *)
+*)
 
 structure HOL_IDE: sig
 

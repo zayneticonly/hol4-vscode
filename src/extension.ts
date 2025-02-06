@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { HOLIDE } from './holIDE';
 import { HOLExtensionContext } from './extensionContext';
-import { log, error } from './common';
+import { log, error, holdir } from './common';
 
 
 function loadUnicodeCompletions(context: vscode.ExtensionContext): { [key: string]: string } {
@@ -32,7 +32,7 @@ let hol4selector: vscode.DocumentSelector = {
  * @returns An extension context if successful, or `undefined` otherwise.
  */
 function initialize(context: vscode.ExtensionContext): HOLExtensionContext | undefined {
-    let holPath = vscode.workspace.getConfiguration('hol4-mode').get<string>('HOLDIR');
+    let holPath = holdir();
     if (!holPath) {
         holPath = process.env['HOLDIR'];
         if (holPath === undefined) {

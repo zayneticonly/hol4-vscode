@@ -288,7 +288,7 @@ fun setFileContents text = let
     open HolParser.Simple
     (* fun addq q = case !trees of (p, ts, qs) => trees := (p, ts, q :: qs) *)
     val _ = PolyML.print_depth 100
-    val _ = Preterm.typecheck_listener := (fn ptm => fn env =>
+    val _ = Listener.add_listener Preterm.typecheck_listener ("vscode", fn (ptm, env) =>
       case get_locn (Preterm.locn ptm) of
         SOME (start, stop) =>
         (case !trees of (p, ts, qs) => trees := (p, ts, (start, stop, ptm, env) :: qs))
