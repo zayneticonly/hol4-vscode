@@ -36,43 +36,43 @@ function addLocationPragma(text: string, position: vscode.Position) {
     return data;
 }
 
-/**
- * Preprocess any `open` declarations in a string. Any declarations are sorted,
- * and for each declaration a `load`-call is generated. If there are no `open`s
- * in the text, then this does nothing.
- */
-function processOpens(text: string): string {
-    text = removeComments(text).replace(/\n\s*\n/g, '\n').replace(/\r/g, '');
-    let index = 0;
-    let buffer = [];
-    let quiet = false;
-    function setQuiet(q: boolean) {
-        if (quiet != q) {
-            buffer.push('\nval _ = HOL_Interactive.toggle_quietdec();\n');
-        }
-        quiet = q;
-    }
-    const theoriesSet = new Set<string>();
-    getImports(text, s => theoriesSet.add(s), (start, end) => {
-        const mid = text.substring(index, start);
-        if (/[^\s;]/.test(mid)) setQuiet(false);
-        buffer.push(mid);
-        setQuiet(true);
-        buffer.push(text.substring(start, end));
-        index = end;
-    });
-    if (!theoriesSet.size) return text;
-    const theories: string[] = [];
-    theoriesSet.forEach(s => theories.push(s));
-
-    setQuiet(false);
-    const banner = `val _ = print "Loading: ${theories.join(' ')} ...\\n";`;
-    const loads = theories.map((s) => `val _ = load "${s}";\n`);
-    const bannerDone = 'val _ = print "Done loading theories.\\n"\n';
-    buffer.unshift(banner, ...loads);
-    buffer.push(bannerDone, text.substring(index));
-    return buffer.join('');
-}
+// /**
+//  * Preprocess any `open` declarations in a string. Any declarations are sorted,
+//  * and for each declaration a `load`-call is generated. If there are no `open`s
+//  * in the text, then this does nothing.
+//  */
+// function processOpens(text: string): string {
+//     text = removeComments(text).replace(/\n\s*\n/g, '\n').replace(/\r/g, '');
+//     let index = 0;
+//     let buffer = [];
+//     let quiet = false;
+//     function setQuiet(q: boolean) {
+//         if (quiet != q) {
+//             buffer.push('\nval _ = HOL_Interactive.toggle_quietdec();\n');
+//         }
+//         quiet = q;
+//     }
+//     const theoriesSet = new Set<string>();
+//     getImports(text, s => theoriesSet.add(s), (start, end) => {
+//         const mid = text.substring(index, start);
+//         if (/[^\s;]/.test(mid)) setQuiet(false);
+//         buffer.push(mid);
+//         setQuiet(true);
+//         buffer.push(text.substring(start, end));
+//         index = end;
+//     });
+//     if (!theoriesSet.size) return text;
+//     const theories: string[] = [];
+//     theoriesSet.forEach(s => theories.push(s));
+//
+//     setQuiet(false);
+//     const banner = `val _ = print "Loading: ${theories.join(' ')} ...\\n";`;
+//     const loads = theories.map((s) => `val _ = load "${s}";\n`);
+//     const bannerDone = 'val _ = print "Done loading theories.\\n"\n';
+//     buffer.unshift(banner, ...loads);
+//     buffer.push(bannerDone, text.substring(index));
+//     return buffer.join('');
+// }
 
 /**
  * Preprocess a tactic selection by removing leading tacticals and trailing
@@ -205,6 +205,8 @@ export class HOLExtensionContext implements
     public notebook?: HolNotebook;
 
     constructor(
+        private context: vscode.ExtensionContext,
+
         /** Path to the HOL installation to use. */
         public holPath: string,
 
@@ -276,7 +278,7 @@ export class HOLExtensionContext implements
             vscode.commands.executeCommand('notebook.selectKernel',
                 { notebookEditor, id: KERNEL_ID, extension: EXTENSION_ID }
             );
-            this.notebook = new HolNotebook(docPath, this.holPath, notebookEditor!);
+            this.notebook = new HolNotebook(this.context, docPath, this.holPath, notebookEditor!);
 
             vscode.window.tabGroups.onDidChangeTabGroups((e) => {
                 if (e.closed && notebookEditor!.notebook.isClosed) {
@@ -341,10 +343,8 @@ export class HOLExtensionContext implements
         }
 
         const text = getSelection(editor);
-        let full = processOpens(text);
-        full = addLocationPragma(full, editor.selection.start);
 
-        await this.notebook!.send(text, true, full);
+        await this.notebook!.send(text, true, true);
     }
 
 
@@ -362,10 +362,8 @@ export class HOLExtensionContext implements
 
         const selection = new vscode.Selection(0, 0, currentLine, 0);
         const text = editor.document.getText(selection);
-        let full = processOpens(text);
-        full = addLocationPragma(full, selection.start);
 
-        await this.notebook!.send(text, true, full);
+        await this.notebook!.send(text, true, true);
     }
 
     /**
@@ -387,7 +385,7 @@ export class HOLExtensionContext implements
         const faketext = `proofManagerLib.g(\`${text}\`)`;
         const realtext = `proofManagerLib.g(\`${locPragma}${text}\`)`;
         const full = `let val x = ${realtext}; val _ = proofManagerLib.set_backup 100 in x end`
-        await this.notebook!.send(faketext, true, full);
+        await this.notebook!.send(faketext, false, true, full);
     }
 
     /**
@@ -407,7 +405,7 @@ export class HOLExtensionContext implements
         let [locPragma, text] = sg;
         const faketext = `proofManagerLib.e(sg\`${text}\`)`;
         const realtext = `proofManagerLib.e(sg\`${locPragma}${text}\`)`;
-        await this.notebook!.send(faketext, true, realtext);
+        await this.notebook!.send(faketext, false, true, realtext);
     }
 
     /**
@@ -423,7 +421,7 @@ export class HOLExtensionContext implements
         const text = `proofManagerLib.e(${tacticText})`;
         const full = addLocationPragma(text, editor.selection.start);
 
-        await this.notebook!.send(text, true, full);
+        await this.notebook!.send(text, false, true, full);
     }
 
 
@@ -440,7 +438,7 @@ export class HOLExtensionContext implements
         const text = `proofManagerLib.e(${tacticText})`;
         const full = addLocationPragma(text, editor.selection.start);
 
-        await this.notebook!.send(text, true, full);
+        await this.notebook!.send(text, false, true, full);
     }
 
     /**

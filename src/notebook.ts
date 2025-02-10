@@ -36,11 +36,12 @@ export class HolNotebook {
     private overflowPromise: Promise<void>;
 
     constructor(
+        context: vscode.ExtensionContext,
         private readonly cwd: string,
         private readonly holPath: string,
         private readonly editor: vscode.NotebookEditor,
     ) {
-        this.kernel = new HolKernel(this.cwd, this.holPath);
+        this.kernel = new HolKernel(context, this.cwd, this.holPath);
         this.kernel.controller.updateNotebookAffinity(
             this.editor.notebook, vscode.NotebookControllerAffinity.Preferred);
         this.kernel.onWillExec(cell => this.outputCell = cell.index + 1);
@@ -119,7 +120,7 @@ export class HolNotebook {
         this.kernel.stop();
     }
 
-    async send(s: string, collapsed?: boolean, fullContent?: string) {
+    async send(s: string, holdep: boolean, collapsed?: boolean, fullContent?: string) {
         if (!this.kernel.running) {
             error('no active session');
             return;
@@ -128,7 +129,7 @@ export class HolNotebook {
         const edit = new vscode.WorkspaceEdit();
         const index = this.editor.notebook.cellCount;
         const data = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, s, 'hol4');
-        if (fullContent !== undefined) data.metadata = { fullContent }
+        data.metadata = { fullContent, holdep };
         edit.set(this.editor.notebook.uri, [vscode.NotebookEdit.insertCells(index, [data])]);
         await vscode.workspace.applyEdit(edit);
         if (collapsed) {

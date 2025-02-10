@@ -249,11 +249,8 @@ fun encodeJsonPosLC lines = encodeJsonPair2 encodeJsonInt o getLineCol lines
 val encodeJsonPos2LC = encodeJsonPair2 o encodeJsonPosLC
 val encodeJsonLocLC = encodeJsonLocation o encodeJsonPosLC
 
-fun holdep text = let
-  val {read, ...} = HolParser.stringToReader true text
-  val mods = Binarymap.foldr (fn (a, _, r) => a :: r) [] (Holdep_tokens.reader_deps ("", read))
-    handle e => []
-  in encodeJsonArray encodeJsonString mods print end;
+fun holdep text =
+  encodeJsonArray encodeJsonString (VSCodeBase.holdep text) print
 
 fun exceptionMessage (exn: exn) =
   PolyML.PrettyBlock(0, false, [], [

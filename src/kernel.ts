@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as child_process from 'child_process';
 import * as path from 'path';
 import { error, KERNEL_ID } from './common';
+import { escapeMLString } from './server';
 
 class Execution {
     private buffer: string = '';
@@ -80,6 +81,8 @@ export class HolKernel {
     /** Fires when HOL says something outside the expected request/response flow. */
     private overflowListener = new vscode.EventEmitter<OverflowEvent>();
 
+    private interceptResult: { data: string, finish: (data: string) => void } | undefined = undefined;
+
     /** The list of cells that are waiting for a previous execution to complete. */
     private executionQueue: vscode.NotebookCell[] = [];
 
@@ -101,7 +104,9 @@ export class HolKernel {
     }
 
     constructor(
-        private cwd: string, private holPath: string,
+        private context: vscode.ExtensionContext,
+        private cwd: string,
+        private holPath: string,
     ) {
         this.controller = vscode.notebooks.createNotebookController(
             KERNEL_ID, 'interactive', 'HOL4', cells => cells.forEach(this.runCell.bind(this)));
@@ -125,7 +130,12 @@ export class HolKernel {
             this.currentExecution.exec.executionOrder = this.executionOrder++;
             this.currentExecution.exec.start(Date.now());
 
-            this.sendRaw((cell.metadata.fullContent ?? cell.document.getText()) + '\0');
+            const content = cell.metadata.fullContent ?? cell.document.getText();
+            if (cell.metadata.holdep) {
+                this.holdepSend(content);
+            } else {
+                this.sendRaw(content + '\0');
+            }
         } else {
             this.currentExecution.exec.start(Date.now());
             this.currentExecution.exec.appendOutput(new vscode.NotebookCellOutput([
@@ -137,7 +147,9 @@ export class HolKernel {
     }
 
     finish() {
-        if (this.currentExecution) {
+        if (this.interceptResult) {
+            this.interceptResult.finish(this.interceptResult.data);
+        } else if (this.currentExecution) {
             this.currentExecution.end();
             this.currentExecution = undefined;
             const cell = this.executionQueue.shift();
@@ -149,7 +161,7 @@ export class HolKernel {
     onWillExec = this.execListener.event;
 
     start(): Promise<void> {
-        this.child = child_process.spawn(path.join(this.holPath!, 'bin', 'hol'), ['--zero'], {
+        this.child = child_process.spawn(path.join(this.holPath, 'bin', 'hol'), ['--zero'], {
             // eslint-disable-next-line @typescript-eslint/naming-convention
             env: { ...process.env, ...{ 'TERM': 'xterm' } },
             cwd: this.cwd,
@@ -176,7 +188,10 @@ export class HolKernel {
                     this.child?.stdout?.off('data', listenerStdout);
                     this.child?.stderr?.off('data', listenerStderr);
                     this.finishOpen(buffer.join(''));
-                    resolve()
+                    const files = ['vscodeBase.sml']
+                        .map(f => this.context.asAbsolutePath(path.join('src', f)))
+                        .map(file => `val _ = use ${escapeMLString(file)};\n`);
+                    this.request(files.join('')).then(_ => resolve());
                 } else {
                     buffer.push(data.toString());
                 }
@@ -187,7 +202,9 @@ export class HolKernel {
     }
 
     private appendOutput(str: string, err?: boolean) {
-        if (this.currentExecution) {
+        if (this.interceptResult) {
+            this.interceptResult.data += str;
+        } else if (this.currentExecution) {
             this.currentExecution.appendOutput(str);
         } else {
             this.overflowListener.fire({ s: str, err: err ?? false });
@@ -248,5 +265,27 @@ export class HolKernel {
         if (this.child && (this.child.killed || !this.child.pid || this.child?.exitCode != null)) {
             this.onKilled();
         }
+    }
+
+    async request(text: string): Promise<string> {
+        this.sendRaw(text + '\0');
+        return new Promise(resolve => {
+            this.interceptResult = {
+                data: '',
+                finish: (data) => {
+                    this.interceptResult = undefined;
+                    resolve(data);
+                }
+            };
+        });
+    }
+
+    async requestJSON<T>(text: string): Promise<T> {
+        return JSON.parse(await this.request(text));
+    }
+
+    async holdepSend(text: string): Promise<void> {
+        await this.request(`val _ = VSCodeBase.load_holdep ${escapeMLString(text)}`);
+        this.sendRaw(text + '\0');
     }
 }

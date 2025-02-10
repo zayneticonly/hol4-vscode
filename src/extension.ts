@@ -67,7 +67,7 @@ function initialize(context: vscode.ExtensionContext): HOLExtensionContext | und
             }
         }
     }
-    return new HOLExtensionContext(holPath, holIDE);
+    return new HOLExtensionContext(context, holPath, holIDE);
 }
 
 let holExtensionContext: HOLExtensionContext | undefined;
