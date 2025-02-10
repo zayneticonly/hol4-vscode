@@ -27,6 +27,7 @@
             {
                 "id": "hol4",
                 "extensions": [
+                    ".sig",
                     ".sml"
                 ],
                 "aliases": [
