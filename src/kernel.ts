@@ -96,7 +96,7 @@ export class HolKernel {
 
     sendRaw(text: string) {
         if (this.child) {
-            // console.log(`send ${JSON.stringify(text)}\n${text}`);
+            console.log(`send ${JSON.stringify(text)}\n${text}`);
             this.child?.stdin?.write(text);
         } else {
             error(`HOL session is not started`);
@@ -176,6 +176,7 @@ export class HolKernel {
             const listenerStderr = (data: Buffer) => {
                 if (!data.length) return;
                 buffer.push(data.toString());
+                // console.log(`start recv err ${data.toString()}`);
                 const s = buffer.join('');
                 this.overflowListener.fire({ s, err: true });
                 buffer.length = 0;
@@ -185,6 +186,7 @@ export class HolKernel {
                 if (!data.length) return;
                 if (data.readUint8(data.length - 1) === 0) {
                     buffer.push(data.toString(undefined, undefined, data.length - 1));
+                    // console.log(`start recv ok "${data.toString(undefined, undefined, data.length - 1)}"`);
                     this.child?.stdout?.off('data', listenerStdout);
                     this.child?.stderr?.off('data', listenerStderr);
                     this.finishOpen(buffer.join(''));
@@ -193,6 +195,7 @@ export class HolKernel {
                         .map(file => `val _ = use ${escapeMLString(file)};\n`);
                     this.request(files.join('')).then(_ => resolve());
                 } else {
+                    // console.log(`start recv ok "${data.toString(undefined, undefined, data.length - 1)}"`);
                     buffer.push(data.toString());
                 }
             }
@@ -217,8 +220,10 @@ export class HolKernel {
             if (!data.length) return;
             if (data.readUint8(data.length - 1) === 0) {
                 this.appendOutput(data.toString(undefined, undefined, data.length - 1));
+                // console.log(`recv ok "${data.toString(undefined, undefined, data.length - 1)}"`);
                 this.finish();
             } else {
+                // console.log(`recv ok "${data.toString(undefined, undefined, data.length - 1)}"`);
                 this.appendOutput(data.toString());
             }
         });
@@ -230,7 +235,7 @@ export class HolKernel {
 
     stop() {
         if (this.child?.pid) {
-            process.kill(-this.child.pid, 'SIGTERM');
+            process.kill(this.child.pid, 'SIGTERM');
         }
         this.onKilled();
     }
@@ -256,7 +261,7 @@ export class HolKernel {
 
     interrupt() {
         if (this.child?.pid) {
-            process.kill(-this.child.pid, 'SIGINT');
+            process.kill(this.child.pid, 'SIGINT');
         }
         this.cancelAll();
     }
