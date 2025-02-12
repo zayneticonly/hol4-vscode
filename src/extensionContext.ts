@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { log, error, EXTENSION_ID, KERNEL_ID } from './common';
 import { HolNotebook } from './notebook';
-import { HOLIDE, entryToCompletionItem, entryToSymbol, getImports, isAccessibleEntry, removeComments } from './holIDE';
+import { HOLIDE, entryToCompletionItem, entryToSymbol, isAccessibleEntry } from './holIDE';
 
 /**
  * Generate a HOL lexer location pragma from a vscode Position value.
@@ -449,7 +449,7 @@ export class HOLExtensionContext implements
             return;
         }
 
-        await this.notebook!.send('proofManagerLib.p ()', true);
+        await this.notebook!.send('proofManagerLib.p ()', false, true);
     }
 
 
@@ -461,7 +461,7 @@ export class HOLExtensionContext implements
             return;
         }
 
-        await this.notebook!.send('proofManagerLib.rotate 1', true);
+        await this.notebook!.send('proofManagerLib.rotate 1', false, true);
     }
 
     /**
@@ -472,7 +472,7 @@ export class HOLExtensionContext implements
             return;
         }
 
-        await this.notebook!.send('proofManagerLib.backup ()', true);
+        await this.notebook!.send('proofManagerLib.backup ()', false, true);
     }
 
     /**
@@ -483,7 +483,7 @@ export class HOLExtensionContext implements
             return;
         }
 
-        await this.notebook!.send('proofManagerLib.restart ()', true);
+        await this.notebook!.send('proofManagerLib.restart ()', false, true);
     }
 
     /**
@@ -494,7 +494,7 @@ export class HOLExtensionContext implements
             return;
         }
 
-        await this.notebook!.send('proofManagerLib.drop ()', true);
+        await this.notebook!.send('proofManagerLib.drop ()', false, true);
     }
 
     /**
@@ -505,7 +505,7 @@ export class HOLExtensionContext implements
             return;
         }
 
-        await this.notebook!.send('Globals.show_types := not (!Globals.show_types)', true);
+        await this.notebook!.send('Globals.show_types := not (!Globals.show_types)', false, true);
     }
 
     /**
@@ -515,7 +515,7 @@ export class HOLExtensionContext implements
         if (!this.isActive()) {
             return;
         }
-        await this.notebook!.send('Globals.show_assums := not (!Globals.show_assums)', true);
+        await this.notebook!.send('Globals.show_assums := not (!Globals.show_assums)', false, true);
     }
 
     /**
