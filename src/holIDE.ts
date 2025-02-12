@@ -534,7 +534,7 @@ export class HOLIDE {
 
         for (const editor of vscode.window.visibleTextEditors) {
             const doc = editor.document;
-            if (doc.languageId == 'hol4') {
+            if (doc.languageId == 'hol4' && doc.uri.scheme == 'file') {
                 if (!this.loadingSpinner) this.startLoadingSpinner();
                 this.startServer(doc).then(server => this.compileDocument(server, doc));
             }

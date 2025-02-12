@@ -96,7 +96,7 @@ export class HolKernel {
 
     sendRaw(text: string) {
         if (this.child) {
-            console.log(`send ${JSON.stringify(text)}\n${text}`);
+            // console.log(`send ${JSON.stringify(text)}\n${text}`);
             this.child?.stdin?.write(text);
         } else {
             error(`HOL session is not started`);
@@ -167,6 +167,7 @@ export class HolKernel {
             cwd: this.cwd,
             detached: true,
         });
+        // console.log(`starting kernel`);
         this.executionOrder = 0;
         this.child.addListener('disconnect', this.onKilled.bind(this));
         this.child.addListener('close', this.onKilled.bind(this));
@@ -235,6 +236,7 @@ export class HolKernel {
 
     stop() {
         if (this.child?.pid) {
+            // console.log(`killing kernel`);
             process.kill(this.child.pid, 'SIGTERM');
         }
         this.onKilled();
@@ -268,6 +270,7 @@ export class HolKernel {
 
     sync() {
         if (this.child && (this.child.killed || !this.child.pid || this.child?.exitCode != null)) {
+            // console.log(`mystery death of kernel`);
             this.onKilled();
         }
     }

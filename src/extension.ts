@@ -199,17 +199,24 @@ export function activate(context: vscode.ExtensionContext) {
         // Refresh the import list for the currently active document.
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor) {
-                holExtensionContext?.holIDE?.updateImports(editor.document);
+                const doc = editor.document;
+                if (doc.languageId == 'hol4' && doc.uri.scheme == 'file') {
+                    (async () => {
+                        const server = await holExtensionContext?.holIDE?.startServer(doc);
+                        if (server) await holExtensionContext?.holIDE?.compileDocument(server, doc);
+                    })();
+                    holExtensionContext?.holIDE?.updateImports(doc);
+                }
             }
         }),
 
-        vscode.workspace.onDidSaveTextDocument(document => {
-            if (document.languageId == 'hol4') {
+        vscode.workspace.onDidSaveTextDocument(doc => {
+            if (doc.languageId == 'hol4' && doc.uri.scheme == 'file') {
                 (async () => {
-                    const server = await holExtensionContext?.holIDE?.startServer(document);
-                    if (server) await holExtensionContext?.holIDE?.compileDocument(server, document);
+                    const server = await holExtensionContext?.holIDE?.startServer(doc);
+                    if (server) await holExtensionContext?.holIDE?.compileDocument(server, doc);
                 })();
-                holExtensionContext?.holIDE?.indexDocument(document);
+                holExtensionContext?.holIDE?.indexDocument(doc);
             }
         }),
 
