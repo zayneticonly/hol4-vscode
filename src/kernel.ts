@@ -167,11 +167,13 @@ export class HolKernel {
             cwd: this.cwd,
             detached: true,
         });
-        // console.log(`starting kernel`);
+        // console.log(`starting kernel ${this.child.pid}`);
         this.executionOrder = 0;
-        this.child.addListener('disconnect', this.onKilled.bind(this));
-        this.child.addListener('close', this.onKilled.bind(this));
-        this.child.addListener('exit', this.onKilled.bind(this));
+        const pid = this.child.pid;
+        const onKilled = () => { if (pid === this.child?.pid) this.onKilled() };
+        this.child.addListener('disconnect', onKilled);
+        this.child.addListener('close', onKilled);
+        this.child.addListener('exit', onKilled);
         return new Promise((resolve, reject) => {
             const buffer: string[] = [];
             const listenerStderr = (data: Buffer) => {
@@ -236,7 +238,7 @@ export class HolKernel {
 
     stop() {
         if (this.child?.pid) {
-            // console.log(`killing kernel`);
+            // console.log(`killing kernel ${this.child.pid}`);
             process.kill(this.child.pid, 'SIGTERM');
         }
         this.onKilled();
@@ -258,11 +260,13 @@ export class HolKernel {
 
     private onKilled() {
         this.cancelAll();
+        // console.log(`releasing kernel ${this.child?.pid}`);
         this.child = undefined;
     }
 
     interrupt() {
         if (this.child?.pid) {
+            // console.log(`interrupting kernel ${this.child.pid}`);
             process.kill(this.child.pid, 'SIGINT');
         }
         this.cancelAll();
@@ -270,7 +274,7 @@ export class HolKernel {
 
     sync() {
         if (this.child && (this.child.killed || !this.child.pid || this.child?.exitCode != null)) {
-            // console.log(`mystery death of kernel`);
+            // console.log(`mystery death of kernel ${this.child.pid}`);
             this.onKilled();
         }
     }

@@ -51,7 +51,7 @@ export class HolServer {
             cwd: this.cwd,
             detached: true,
         });
-        // console.log(`starting server`);
+        // console.log(`starting server ${this.child.pid}`);
         const asyncBuffer: string[] = [];
         function parse(s: string): any {
             try {
@@ -80,7 +80,8 @@ export class HolServer {
                 asyncBuffer.push(data.toString());
             }
         });
-        const onKilled = this.onKilled.bind(this);
+        const pid = this.child.pid;
+        const onKilled = () => { if (pid === this.child?.pid) this.onKilled() };
         this.child?.addListener('disconnect', onKilled);
         this.child?.addListener('close', onKilled);
         this.child?.addListener('exit', onKilled);
@@ -166,13 +167,14 @@ export class HolServer {
     stop() {
         if (this.child?.pid) {
             // console.log('killing server');
+            // console.log(`killing server ${this.child.pid}`);
             process.kill(this.child.pid, 'SIGTERM');
         }
         this.onKilled();
     }
 
     private onKilled() {
-        console.error(`server killed`);
+        console.error(`server ${this.child?.pid} killed`);
         this.child = undefined;
         this.receiver?.reject();
         this.receiver = undefined;
@@ -180,6 +182,7 @@ export class HolServer {
 
     interrupt() {
         if (this.child?.pid) {
+            // console.log(`interrupting server ${this.child.pid}`);
             process.kill(this.child.pid, 'SIGINT');
         }
     }
