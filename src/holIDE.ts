@@ -348,7 +348,7 @@ export class HOLIDE {
             const newDiags = [];
             for (const e of msgs) {
                 switch (e.kind) {
-                    case 'compilerOut': log(e.body); break;
+                    case 'compilerOut':
                     case 'toplevelOut': log(e.body); break;
                     case 'compileProgress':
                         if (e.pos[0] || e.pos[1]) {
@@ -360,7 +360,8 @@ export class HOLIDE {
                         newDiags.push(new vscode.Diagnostic(server.utf8ToRange(e.pos), e.msg, e.hard ?
                             vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning));
                         break;
-                    case 'compileCompleted': progress = undefined; dirty = true; break;
+                    case 'compileCompleted':
+                    case 'interrupted': progress = undefined; dirty = true; break;
                 }
             }
             this.diagState[uri].push(...newDiags);

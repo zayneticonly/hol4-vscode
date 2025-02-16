@@ -264,6 +264,15 @@ fun get_locn (locn.Loc_Near loc) = get_locn loc
   | get_locn (locn.Loc (locn.LocA start, locn.LocA (l,c))) = SOME (start, (l,c+1))
   | get_locn _ = NONE
 
+val _ = Listener.add_listener Preterm.typecheck_listener ("vscode", fn (ptm, env) =>
+  case !currentCompilation of
+    SOME ((trees, _), _) =>
+    (case get_locn (Preterm.locn ptm) of
+      SOME (start, stop) =>
+      (case !trees of (p, ts, qs) => trees := (p, ts, (start, stop, ptm, env) :: qs))
+    | _ => ())
+  | _ => ())
+
 fun setFileContents text = let
   val () = case !currentCompilation of
       SOME ((trees, text), thread) => (
@@ -285,47 +294,45 @@ fun setFileContents text = let
     open HolParser.Simple
     (* fun addq q = case !trees of (p, ts, qs) => trees := (p, ts, q :: qs) *)
     val _ = PolyML.print_depth 100
-    val _ = Listener.add_listener Preterm.typecheck_listener ("vscode", fn (ptm, env) =>
-      case get_locn (Preterm.locn ptm) of
-        SOME (start, stop) =>
-        (case !trees of (p, ts, qs) => trees := (p, ts, (start, stop, ptm, env) :: qs))
-      | _ => ())
-    val () = HOL_IDE.initialize {
-      text = text,
-      filename = !filename,
-      parseError = fn pos => fn s => printToAsyncChannel id (fn print => (
-        print "{\"kind\":\"error\",\"hard\":true";
-        print ",\"pos\":"; encodeJsonPos2LC lines pos print;
-        print ",\"msg\":"; encodeJsonString s print;
-        print "}")),
-      compilerOut = fn s => printToAsyncChannel id (fn print => (
-        print "{\"kind\":\"compilerOut\"";
-        print ",\"body\":"; encodeJsonString s print;
-        print "}")),
-      toplevelOut = fn s => printToAsyncChannel id (fn print => (
-        print "{\"kind\":\"toplevelOut\"";
-        print ",\"body\":"; encodeJsonString s print;
-        print "}")),
-      progress = fn i => printToAsyncChannel id (fn print => (
-        case !trees of (_, ts, qs) => trees := (i, ts, qs);
-        print "{\"kind\":\"compileProgress\"";
-        print ",\"pos\":"; encodeJsonPosLC lines i print;
-        print "}")),
-      error = fn {hard, location = {startPosition, endPosition, ...}, message, ...} =>
-        printError hard (startPosition, endPosition) message,
-      runtimeExn = fn e =>
-        printError true
-          (case PolyML.Exception.exceptionLocation e of
-            NONE => (fn i => (i, i)) (#1 (!trees))
-          | SOME {startPosition, endPosition, ...} => (startPosition, endPosition))
-          (exceptionMessage e),
-      mlParseTree = fn t => case !trees of (p, ts, qs) => trees := (p, t :: ts, qs),
-      holParseTree = fn _ => ()
-    }
-    val () = lastTrees := (!trees, (text, lines))
-    val () = currentCompilation := NONE
-    in printToAsyncChannel id (fn print => print "{\"kind\":\"compileCompleted\"}") end
-    handle Thread.Interrupt => ()
+    in
+      (HOL_IDE.initialize {
+        text = text,
+        filename = !filename,
+        parseError = fn pos => fn s => printToAsyncChannel id (fn print => (
+          print "{\"kind\":\"error\",\"hard\":true";
+          print ",\"pos\":"; encodeJsonPos2LC lines pos print;
+          print ",\"msg\":"; encodeJsonString s print;
+          print "}")),
+        compilerOut = fn s => printToAsyncChannel id (fn print => (
+          print "{\"kind\":\"compilerOut\"";
+          print ",\"body\":"; encodeJsonString s print;
+          print "}")),
+        toplevelOut = fn s => printToAsyncChannel id (fn print => (
+          print "{\"kind\":\"toplevelOut\"";
+          print ",\"body\":"; encodeJsonString s print;
+          print "}")),
+        progress = fn i => printToAsyncChannel id (fn print => (
+          case !trees of (_, ts, qs) => trees := (i, ts, qs);
+          print "{\"kind\":\"compileProgress\"";
+          print ",\"pos\":"; encodeJsonPosLC lines i print;
+          print "}")),
+        error = fn {hard, location = {startPosition, endPosition, ...}, message, ...} =>
+          printError hard (startPosition, endPosition) message,
+        runtimeExn = fn e =>
+          printError true
+            (case PolyML.Exception.exceptionLocation e of
+              NONE => (fn i => (i, i)) (#1 (!trees))
+            | SOME {startPosition, endPosition, ...} => (startPosition, endPosition))
+            (exceptionMessage e),
+        mlParseTree = fn t => case !trees of (p, ts, qs) => trees := (p, t :: ts, qs),
+        holParseTree = fn _ => ()
+      };
+      lastTrees := (!trees, (text, lines));
+      currentCompilation := NONE;
+      printToAsyncChannel id (fn print => print "{\"kind\":\"compileCompleted\"}"))
+      handle Thread.Interrupt =>
+        printToAsyncChannel id (fn print => print "{\"kind\":\"interrupted\"}")
+    end
   val thread = Thread.fork (compileThread, [Thread.InterruptState Thread.InterruptDefer])
   in currentCompilation := SOME ((trees, (text, lines)), thread) end
 

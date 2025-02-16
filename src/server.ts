@@ -166,7 +166,6 @@ export class HolServer {
 
     stop() {
         if (this.child?.pid) {
-            // console.log('killing server');
             // console.log(`killing server ${this.child.pid}`);
             process.kill(this.child.pid, 'SIGTERM');
         }

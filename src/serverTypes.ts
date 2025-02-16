@@ -25,9 +25,12 @@ export type CompileProgressMessage = {
 export type CompileCompletedMessage = {
     kind: 'compileCompleted'
 };
+export type InterruptedMessage = {
+    kind: 'interrupted'
+};
 
 export type Message = CompilerOutMessage | ToplevelOutMessage | ErrorMessage |
-    CompileProgressMessage | CompileCompletedMessage;
+    CompileProgressMessage | CompileCompletedMessage | InterruptedMessage;
 
 export type PrettyString = string;
 
