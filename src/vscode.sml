@@ -521,6 +521,20 @@ fun getState startTarget endTarget = let
       in SOME (text, lines, offset, trees, ds, pt) end
   end
 
+fun getBinding s = let
+  exception Ret of thminfo
+  in
+    (Theory.upd_binding s (fn i => raise Ret i); NONE)
+    handle Ret i => SOME i | HOL_ERR _ => NONE
+  end
+
+fun lookupThmInfo kn =
+  if #Thy kn = Theory.current_theory () then
+    case getBinding (#Name kn) of
+      SOME i => SOME i
+    | NONE => Option.map snd (DB.lookup kn)
+  else Option.map snd (DB.lookup kn)
+
 fun getHoverInfo startTarget endTarget =
   case getState startTarget endTarget of
     NONE => print "[]"
@@ -658,8 +672,8 @@ fun gotoDefinition target =
                 findVar bvs
               else if is_const hd then
                 case DefnBase.lookup_userdef hd of
-                  SOME {thmname,...} => (case DB.lookup thmname of
-                    SOME (_, {loc = DB.Located {scriptpath, linenum, ...}, ...}) =>
+                  SOME {thmname,...} => (case lookupThmInfo thmname of
+                    SOME {loc = DB.Located {scriptpath, linenum, ...}, ...} =>
                     [(LineCol loc,
                       FileLine (holpathdb.subst_pathvars scriptpath, SOME (linenum - 1)))]
                   | _ => [])
@@ -689,8 +703,9 @@ fun gotoDefinition target =
             val stem = String.extract (basename, 0, SOME (lastIndexOf #"." basename))
             in
               if 6 <= size stem andalso String.extract (stem, size stem - 6, NONE) = "Theory" then
-                case DB.lookup {Name = id, Thy = String.extract (stem, 0, SOME (size stem - 6))} of
-                  SOME (_, {loc = DB.Located {scriptpath, linenum, ...}, ...}) =>
+                case lookupThmInfo
+                    {Name = id, Thy = String.extract (stem, 0, SOME (size stem - 6))} of
+                  SOME {loc = DB.Located {scriptpath, linenum, ...}, ...} =>
                   FileLine (holpathdb.subst_pathvars scriptpath, SOME (linenum - 1))
                 | _ => PolyLoc loc
               else PolyLoc loc
