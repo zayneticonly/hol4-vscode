@@ -82,7 +82,7 @@ fun initialize {
     in f (fn s => push (FlatChunk (SOME j, Substring.full s))) (i, s) end
   val {feed, regular, finishThmVal, doDecl, ...} =
     HolParser.ToSML.mkPushTranslatorCore {
-      filename = filename, parseError = parseError,
+      filename = filename, parseError = parseError, quietOpen = true,
       read = fn _ => !sr before sr := ""
     } {
       regular = push o RegularChunk,
