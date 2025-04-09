@@ -194,7 +194,7 @@ export class HolKernel {
                     this.child?.stderr?.off('data', listenerStderr);
                     this.finishOpen(buffer.join(''));
                     const files = ['vscodeBase.sml']
-                        .map(f => this.context.asAbsolutePath(path.join('src', f)))
+                        .map(f => this.context.asAbsolutePath(path.join('resources', f)))
                         .map(file => `val _ = use ${escapeMLString(file)};\n`);
                     this.request(files.join('')).then(_ => resolve());
                 } else {

@@ -59,7 +59,14 @@ type error =
 type subtree = PolyML.parseTree option
 type trees = PolyML.parseTree list
 
-fun prelude () = Tactical.set_prover (fn (t, _) => mk_oracle_thm "fast_proof" ([], t))
+fun prelude () = let
+  fun f (t, _) = mk_oracle_thm "fast_proof" ([], t)
+  fun f2 g = (
+    if current_theory () = "scratch"
+    then HOL_WARNING "HOL_IDE" "prove" "calling prove before new_theory"
+    else Tactical.set_prover f;
+    f g)
+  in Tactical.set_prover f2 end
 
 fun postPrelude () = ()
 
