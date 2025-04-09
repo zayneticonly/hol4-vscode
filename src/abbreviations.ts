@@ -1,7 +1,7 @@
 /// Adapted from https://github.com/leanprover/vscode-lean4/tree/4c7cbdd/lean4-unicode-input, Apache License
 import { assert, error } from 'console'
 import { commands, Disposable, extensions, Hover, HoverProvider, languages, Range as LCRange, Position, Selection, TextDocument, TextEditor, window, workspace } from 'vscode'
-import * as abbreviations from '../unicode-completions.json'
+import * as abbreviations from './unicode-completions.json'
 import { hol4selector, KERNEL_ID } from './common'
 
 const symbolsByAbbreviation: { [abbrev: string]: string } = abbreviations

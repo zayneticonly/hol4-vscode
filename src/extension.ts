@@ -7,21 +7,6 @@ import { log, error, holdir, hol4selector } from './common';
 import { AbbreviationFeature } from './abbreviations';
 
 
-function loadUnicodeCompletions(context: vscode.ExtensionContext): { [key: string]: string } {
-    let unicodeCompletionsFilepath = context.asAbsolutePath('unicode-completions.json');
-
-    log('Loading unicode completions.');
-    let completions: { [key: string]: string } = {};
-    try {
-        const data = fs.readFileSync(unicodeCompletionsFilepath);
-        completions = JSON.parse(data.toString());
-    } catch (err) {
-        error(`Unable to read unicode completions file: ${err}`);
-        vscode.window.showErrorMessage('Unable to load unicode completions.');
-    }
-    return completions;
-}
-
 /**
  * Initialize the HOL extension.
  *
@@ -73,8 +58,6 @@ export function activate(context: vscode.ExtensionContext) {
         error("Unable to initialize extension.");
         return;
     }
-
-    let completions = loadUnicodeCompletions(context);
 
     let commands = [
         // Start a new HOL4 session.
