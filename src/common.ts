@@ -1,6 +1,11 @@
-import { OutputChannel, window, workspace } from 'vscode';
+import { DocumentSelector, OutputChannel, window, workspace } from 'vscode';
 export const EXTENSION_ID = 'oskarabrahamsson.hol4-mode';
 export const KERNEL_ID = 'hol4';
+
+export const hol4selector: DocumentSelector = {
+    scheme: 'file',
+    language: KERNEL_ID
+};
 
 let stderrOutput: OutputChannel;
 let firstError = true;

@@ -3,7 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { HOLIDE } from './holIDE';
 import { HOLExtensionContext } from './extensionContext';
-import { log, error, holdir } from './common';
+import { log, error, holdir, hol4selector } from './common';
+import { AbbreviationFeature } from './abbreviations';
 
 
 function loadUnicodeCompletions(context: vscode.ExtensionContext): { [key: string]: string } {
@@ -20,11 +21,6 @@ function loadUnicodeCompletions(context: vscode.ExtensionContext): { [key: strin
     }
     return completions;
 }
-
-let hol4selector: vscode.DocumentSelector = {
-    scheme: 'file',
-    language: 'hol4'
-};
 
 /**
  * Initialize the HOL extension.
@@ -200,7 +196,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor) {
                 const doc = editor.document;
-                if (doc.languageId == 'hol4' && doc.uri.scheme == 'file') {
+                if (vscode.languages.match(hol4selector, doc)) {
                     (async () => {
                         const server = await holExtensionContext?.holIDE?.startServer(doc);
                         if (server) await holExtensionContext?.holIDE?.compileDocument(server, doc);
@@ -211,7 +207,7 @@ export function activate(context: vscode.ExtensionContext) {
         }),
 
         vscode.workspace.onDidSaveTextDocument(doc => {
-            if (doc.languageId == 'hol4' && doc.uri.scheme == 'file') {
+            if (vscode.languages.match(hol4selector, doc)) {
                 (async () => {
                     const server = await holExtensionContext?.holIDE?.startServer(doc);
                     if (server) await holExtensionContext?.holIDE?.compileDocument(server, doc);
@@ -249,25 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         // HOL IDE commands END
 
-        vscode.languages.registerCompletionItemProvider(hol4selector,
-            {
-                async provideCompletionItems(_document, position, _token, context) {
-                    let items = [];
-                    let range = new vscode.Range(position.translate(0, -1), position);
-                    for (const matchKey in completions) {
-                        let matchVal = completions[matchKey];
-                        let item = new vscode.CompletionItem(context.triggerCharacter + matchKey);
-                        item.kind = vscode.CompletionItemKind.Text;
-                        item.range = range;
-                        item.detail = matchVal;
-                        item.insertText = matchVal;
-                        items.push(item);
-                    }
-                    return items;
-                }
-            },
-            ...['\\']
-        ),
+        new AbbreviationFeature(),
 
         vscode.languages.registerCompletionItemProvider(
             hol4selector,

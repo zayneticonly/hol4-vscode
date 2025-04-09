@@ -56,6 +56,12 @@
                 "category": "HOL"
             },
             {
+                "command": "hol4-mode.input.convert",
+                "title": "Input: Convert Current Abbreviation",
+                "description": "Converts the current abbreviation (e.g. \\lam).",
+                "category": "HOL"
+            },
+            {
                 "command": "hol4-mode.sendSelection",
                 "title": "Send selection",
                 "category": "HOL"
@@ -164,6 +170,12 @@
             }
         ],
         "keybindings": [
+            {
+                "command": "hol4-mode.input.convert",
+                "key": "tab",
+                "mac": "tab",
+                "when": "editorTextFocus && hol4-mode.input.isActive"
+            },
             {
                 "command": "hol4-mode.startSession",
                 "key": "ctrl+h h",
