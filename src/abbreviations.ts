@@ -353,18 +353,6 @@ class AbbreviationRewriter {
         // We don't want replaced symbols (e.g. "\") to trigger abbreviations.
         this.doNotTrackNewAbbr = true
         let ok = await this.replaceAbbreviations(replacements)
-        try {
-            ok = await this.textEditor.edit(builder => {
-                for (const r of replacements) {
-                    builder.replace(
-                        toVsCodeRange(r.range, this.textEditor.document),
-                        r.newText
-                    )
-                }
-            })
-        } catch (e) {
-            error('while replacing abbreviation: ' + e)
-        }
         this.doNotTrackNewAbbr = false
 
         if (ok) {
@@ -563,8 +551,7 @@ export class AbbreviationFeature {
 
     private setEditor(e: TextEditor | undefined) {
         if (e) {
-            const doc = e.document
-            if (languages.match(hol4selector, doc) > 0) {
+            if (languages.match(hol4selector, e.document) == 0) {
                 e = undefined
             }
         }
