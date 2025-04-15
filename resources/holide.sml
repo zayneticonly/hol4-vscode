@@ -60,6 +60,9 @@ type subtree = PolyML.parseTree option
 type trees = PolyML.parseTree list
 
 fun prelude () = let
+  val _ = PolyML.Compiler.reportUnreferencedIds := true
+  val _ = PolyML.Compiler.printInAlphabeticalOrder := false
+  val _ = PolyML.Compiler.maxInlineSize := 80
   fun f (t, _) = mk_oracle_thm "fast_proof" ([], t)
   fun f2 g = (
     if current_theory () = "scratch"
@@ -132,10 +135,9 @@ fun initialize {
         curToken := toState (if #2 base then #1 base + hi else #1 base) (readChunk ());
         if lo+1 = hi then SOME (String.sub(s, lo)) else read2 ())
   fun getOffset () = case !curToken of
-      Reading ((base, flat), lo, hi, s) => if flat then base + lo else base
+      Reading ((base, reg), lo, _, _) => if reg then base + lo else base
     | EOF pos => pos
   val serial = ref 1
-  val result = ref []
   fun ptFn NONE = ()
     | ptFn (SOME pt) = mlParseTree pt
   fun codeFn NONE () = ()
