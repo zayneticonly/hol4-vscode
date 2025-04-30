@@ -272,7 +272,7 @@ val _ = Listener.add_listener Preterm.typecheck_listener ("vscode", fn (ptm, env
       (case !trees of (p, ts, qs) => trees := (p, ts, (start, stop, ptm, env) :: qs))
     | _ => ())
   | _ => ())
-  handle Listener.DUP _ =>
+  handle HOL_ERR _ =>
     !WARNING_outstream "<<warning: failed to add typecheck listener>>\n"
 
 fun setFileContents text = let
